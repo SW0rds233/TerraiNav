@@ -1,0 +1,547 @@
+"""
+TerraiNav Web API - 地形威胁评估与路径规划服务
+提供三个核心API：
+1. /api/get_heatmap - 返回热力图图片URL
+2. /api/get_pathmap - 返回路径规划图URL
+3. /api/get_threat_data - 返回威胁度矩阵和巡逻点信息
+"""
+
+from flask import Flask, request, jsonify, send_from_directory, url_for
+from flask_cors import CORS
+import os
+import logging
+import uuid
+import json
+import base64
+import io
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+matplotlib.interactive(False)
+from PIL import Image
+from datetime import datetime
+
+# 导入业务模块
+from agent import TerrainAnalyzer
+from assess import TerrainAssessor
+from path import PathPlanner
+
+# ========================== 配置 ==========================
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+# CORS配置（允许所有跨域）
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# 路径配置
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
+OUTPUT_FOLDER = os.path.join(BASE_DIR, "static", "output")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# 上传文件最大大小 50MB
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+
+# ========================== 业务组件 ==========================
+# 全局分析器（需要在前端初始化时设置）
+analyzer = None
+assessor = TerrainAssessor()
+planner = PathPlanner()
+
+
+# ========================== 工具函数 ==========================
+def parse_divide(divide_str):
+    """解析分块字符串，如 '4*6' -> (4, 6)"""
+    try:
+        parts = divide_str.strip().split("*")
+        if len(parts) != 2:
+            raise ValueError("分块字符串格式错误，应为 '行*列'，如 '4*6'")
+        rows = int(parts[1])
+        cols = int(parts[0])
+        if rows <= 0 or cols <= 0:
+            raise ValueError("行和列必须为正整数")
+        return rows, cols
+    except Exception as e:
+        raise ValueError(f"分块字符串解析失败: {e}")
+
+
+def save_upload_file(file):
+    """保存上传的图片文件"""
+    if file is None:
+        raise ValueError("未上传文件")
+
+    # 生成唯一文件名
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".bmp"]:
+        raise ValueError(f"不支持的图片格式: {ext}")
+
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    return filepath
+
+
+def save_output_image(fig, prefix="img"):
+    """保存matplotlib生成的图片，返回URL路径"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_id = uuid.uuid4().hex[:8]
+    filename = f"{prefix}_{timestamp}_{unique_id}.png"
+    filepath = os.path.join(OUTPUT_FOLDER, filename)
+
+    fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor="white")
+    import matplotlib.pyplot as plt
+
+    plt.close(fig)
+
+    # 返回相对URL路径
+    return f"/static/output/{filename}"
+
+
+def get_image_size(filepath):
+    """获取图片尺寸 (width, height)"""
+    with Image.open(filepath) as img:
+        return img.size  # (width, height)
+
+
+# ========================== API 1: 热力图 ==========================
+@app.route("/api/init", methods=["POST"])
+def init_api():
+    """初始化AI分析器"""
+    global analyzer
+
+    try:
+        data = request.get_json()
+        api_key = data.get("api_key", "").strip()
+
+        if not api_key:
+            return jsonify({"success": False, "error": "API Key不能为空"}), 400
+
+        # 创建分析器（使用用户提供的API Key）
+        analyzer = TerrainAnalyzer.create_analyzer(
+            api_key=api_key,
+            model="qwen3.6-plus",
+            max_workers=2,
+        )
+
+        return jsonify({"success": True, "message": "API初始化成功"})
+
+    except Exception as e:
+        logging.error(f"API初始化失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/get_heatmap", methods=["POST"])
+def get_heatmap():
+    """
+    API 1: 获取热力图
+    输入: divide (分块字符串如 "4*6"), map_picture (地图图片文件)
+    输出: heatmap_url (热力图图片URL)
+    """
+    global analyzer
+
+    try:
+        # 1. 获取参数
+        divide = request.form.get("divide", "").strip()
+        map_file = request.files.get("map_picture")
+
+        if not divide:
+            return jsonify({"success": False, "error": "分块参数不能为空"}), 400
+        if not map_file:
+            return jsonify({"success": False, "error": "地图图片不能为空"}), 400
+        if analyzer is None:
+            return jsonify(
+                {"success": False, "error": "请先调用 /api/init 初始化API"}
+            ), 400
+
+        # 2. 解析分块参数
+        rows, cols = parse_divide(divide)
+
+        # 3. 保存上传的图片
+        image_path = save_upload_file(map_file)
+        img_width, img_height = get_image_size(image_path)
+
+        logging.info(f"收到图片: {map_file.filename}, 尺寸: {img_width}x{img_height}")
+        logging.info(f"分块: {rows} x {cols}")
+
+        # 4. 调用AI分析地形
+        logging.info("开始AI地形分析...")
+        terrain_data = analyzer.analyze_terrain(
+            image_path=image_path,
+            rows=rows,
+            cols=cols,
+            max_workers=2,
+        )
+
+        logging.info(f"AI分析完成，识别到 {len(terrain_data)} 个地形要素")
+
+        # 5. 威胁评估
+        df, unique_x, unique_y = assessor.assess_terrain(terrain_data)
+        threat_matrix = assessor.build_threat_matrix(df, unique_x, unique_y)
+
+        logging.info(f"威胁矩阵构建完成: {threat_matrix.shape}")
+
+        # 6. 检测关键点并生成路径
+        from scipy.ndimage import zoom
+        keypoints = planner.detect_keypoints(threat_matrix)
+        
+        path_coords = None
+        best_path_length = 0
+        
+        if keypoints:
+            # 加入起点（从前端读入）
+            start_point = request.form.get("start_point") or request.json.get("start_point") or request.get_json().get("start_point")
+            all_points = [start_point] + keypoints
+            aco = planner.ACO_TSP(all_points, ant_num=50, max_iter=200)
+            best_path, best_len = aco.run()
+            path_coords = [all_points[idx] for idx in best_path]
+            best_path_length = float(best_len)
+            logging.info(f"路径规划: {len(path_coords)} 点, 长度: {best_path_length:.2f}")
+        
+        # 7. 生成纯热力图（与原图尺寸一致，无坐标轴图例）
+        output_size = (img_width, img_height)
+        fig = planner.get_pure_heatmap(threat_matrix, output_size)
+        heatmap_url = save_output_image(fig, "heatmap")
+        logging.info(f"纯热力图生成完成: {heatmap_url}")
+
+        # 8. 生成路径图（与原图尺寸一致，无坐标轴图例）
+        pathmap_url = ""
+        if path_coords:
+            fig_path = planner.get_pure_pathmap(threat_matrix, path_coords, output_size)
+            pathmap_url = save_output_image(fig_path, "pathmap")
+            logging.info(f"路径图生成完成: {pathmap_url}")
+
+        return jsonify(
+            {
+                "success": True,
+                "heatmap_url": heatmap_url,
+                "pathmap_url": pathmap_url,
+                "matrix_shape": list(threat_matrix.shape),
+                "original_size": [img_width, img_height],
+                "path_coords": path_coords,
+                "best_path_length": best_path_length,
+            }
+        )
+
+    except Exception as e:
+        logging.error(f"生成热力图失败: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ========================== API 2: 路径规划图 ==========================
+@app.route("/api/get_pathmap", methods=["POST"])
+def get_pathmap():
+    """
+    API 2: 获取路径规划图
+    输入: threat_matrix (威胁度矩阵，JSON格式二维数组)
+    输出: pathmap_url (路径规划图URL)
+    """
+    try:
+        # 1. 获取威胁矩阵
+        data = request.get_json()
+        threat_matrix_list = data.get("threat_matrix", [])
+
+        if not threat_matrix_list:
+            return jsonify({"success": False, "error": "威胁矩阵不能为空"}), 400
+
+        # 转换为numpy数组
+        threat_matrix = np.array(threat_matrix_list, dtype=np.float32)
+
+        logging.info(f"收到威胁矩阵: {threat_matrix.shape}")
+
+        # 2. 检测关键点
+        keypoints = planner.detect_keypoints(threat_matrix)
+        logging.info(f"检测到 {len(keypoints)} 个关键点")
+
+        # 3. 路径规划
+        path_coords = None
+        best_len = 0
+
+        if keypoints:
+            all_points = [(0, 0)] + keypoints
+            aco = planner.ACO_TSP(all_points, ant_num=50, max_iter=200)
+            best_path, best_len = aco.run()
+            path_coords = [all_points[idx] for idx in best_path]
+
+        # 4. 生成路径规划图（不扩展到原图尺寸，只需要与矩阵尺寸匹配）
+        fig = planner.get_heatmap_figure(threat_matrix, path_coords)
+
+        # 5. 保存并返回URL
+        pathmap_url = save_output_image(fig, "pathmap")
+
+        logging.info(f"路径规划图生成完成: {pathmap_url}")
+
+        return jsonify(
+            {
+                "success": True,
+                "pathmap_url": pathmap_url,
+                "keypoints_count": len(keypoints),
+                "best_path_length": float(best_len),
+                "path_coords": path_coords,
+            }
+        )
+
+    except Exception as e:
+        logging.error(f"生成路径规划图失败: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ========================== API 3: 威胁数据 ==========================
+@app.route("/api/get_threat_data", methods=["POST"])
+def get_threat_data():
+    """
+    API 3: 获取威胁度矩阵和巡逻点信息
+    输入: divide (分块字符串如 "4*6"), map_picture (地图图片文件), start_point (起始区块如 "1,1")
+    输出: threat_matrix (威胁度矩阵), patrol_points (巡逻点信息列表)
+
+    巡逻点信息格式: [排序，所属区块，威胁度，图上坐标，具体位置，威胁原因分析]
+    """
+    global analyzer
+
+    try:
+        # 1. 获取参数
+        divide = request.form.get("divide", "").strip()
+        map_file = request.files.get("map_picture")
+        start_point_str = request.form.get("start_point", "0,0").strip()
+
+        if not divide:
+            return jsonify({"success": False, "error": "分块参数不能为空"}), 400
+        if not map_file:
+            return jsonify({"success": False, "error": "地图图片不能为空"}), 400
+        if analyzer is None:
+            return jsonify(
+                {"success": False, "error": "请先调用 /api/init 初始化API"}
+            ), 400
+
+        # 2. 解析分块参数
+        rows, cols = parse_divide(divide)
+
+        # 3. 解析起始区块参数
+        try:
+            start_parts = start_point_str.split(",")
+            if len(start_parts) != 2:
+                raise ValueError("起始区块格式错误，应为 '行,列'，如 '1,1'")
+            start_row = int(start_parts[0].strip())
+            start_col = int(start_parts[1].strip())
+            if start_row < 0 or start_col < 0 or start_row >= rows or start_col >= cols:
+                raise ValueError(f"起始区块超出范围，应在 0-{rows-1}, 0-{cols-1} 之间")
+            start_point = (start_row, start_col)
+        except Exception as e:
+            raise ValueError(f"起始区块参数解析失败: {e}")
+
+        # 4. 保存上传的图片
+        image_path = save_upload_file(map_file)
+        img_width, img_height = get_image_size(image_path)
+
+        logging.info(f"收到图片: {map_file.filename}, 尺寸: {img_width}x{img_height}")
+        logging.info(f"分块: {rows} x {cols}")
+        logging.info(f"起始区块: {start_point}")
+
+        # 4. 调用AI分析地形
+        logging.info("开始AI地形分析...")
+        terrain_data = analyzer.analyze_terrain(
+            image_path=image_path,
+            rows=rows,
+            cols=cols,
+            max_workers=2,
+        )
+
+        logging.info(f"AI分析完成，识别到 {len(terrain_data)} 个地形要素")
+
+        # 5. 威胁评估
+        df, unique_x, unique_y = assessor.assess_terrain(terrain_data)
+        threat_matrix = assessor.build_threat_matrix(df, unique_x, unique_y)
+
+        logging.info(f"威胁矩阵构建完成: {threat_matrix.shape},{threat_matrix}")
+
+        # 6. 检测关键点（巡逻点）
+        keypoints = planner.detect_keypoints(threat_matrix)
+
+        # 7. 构建巡逻点信息
+        patrol_points = []
+        for idx, (row, col) in enumerate(keypoints):
+            # 排序（从1开始）
+            rank = idx + 1
+
+            # 所属区块 (block_row, block_col)
+            block_row = row
+            block_col = col
+
+            # 威胁度
+            threat_score = float(threat_matrix[row, col])
+
+            # 图上坐标（转换到原图像素坐标）
+            block_width = img_width // cols
+            block_height = img_height // rows
+            pixel_x = block_col * block_width + block_width // 2
+            pixel_y = block_row * block_height + block_height // 2
+            pixel_coords = [pixel_x, pixel_y]
+
+            # 具体位置（区块索引）
+            block_position = f"区块({block_row}, {block_col})"
+
+            # 威胁原因分析（从df中获取该坐标的详细信息）
+            # 找到对应的df记录
+            threat_reason = ""
+            for _, r in df.iterrows():
+                if r.get("矩阵Y") == row and r.get("矩阵X") == col:
+                    threat_reason = f"{r.get('类型', '未知')}, {r.get('坡度', '未知')}, {r.get('威胁等���', '未知')}, {r.get('备注', '')}"
+                    break
+
+            patrol_points.append(
+                {
+                    "rank": rank,
+                    "block": f"({block_row}, {block_col})",
+                    "threat_score": threat_score,
+                    "pixel_coords": pixel_coords,
+                    "block_position": block_position,
+                    "threat_reason": threat_reason,
+                }
+            )
+
+        # 按威胁度排序
+        patrol_points.sort(key=lambda x: x["threat_score"], reverse=True)
+        for idx, pt in enumerate(patrol_points):
+            pt["rank"] = idx + 1
+
+        logging.info(f"巡逻点信息构建完成: {len(patrol_points)} 个点")
+
+        # ===== 8. 生成热力图（与原图尺寸一致，无坐标轴图例）=====
+        heatmap_url = ""
+        output_size = (img_width, img_height)
+        fig_heatmap = planner.get_pure_heatmap(threat_matrix, output_size)
+        heatmap_url = save_output_image(fig_heatmap, "heatmap")
+        logging.info(f"热力图生成完成: {heatmap_url}")
+
+        # ===== 9. 路径规划 (ACO) =====
+        path_coords = None
+        best_path_length = 0
+        pathmap_url = ""
+        
+        if keypoints:
+            # 加入用户指定的起点
+            all_points = [start_point] + keypoints
+            aco = planner.ACO_TSP(all_points, ant_num=50, max_iter=200)
+            best_path, best_len = aco.run()
+            path_coords = [all_points[idx] for idx in best_path]
+            best_path_length = float(best_len)
+            
+            logging.info(f"路径规划完成: {len(path_coords)} 个点, 长度: {best_path_length:.2f}")
+            
+            # 生成纯路径图（与原图尺寸一致，无坐标轴图例）
+            fig_path = planner.get_pure_pathmap(threat_matrix, path_coords, output_size)
+            pathmap_url = save_output_image(fig_path, "pathmap")
+            logging.info(f"路径图生成完成: {pathmap_url}")
+
+        return jsonify(
+            {
+                "success": True,
+                "threat_matrix": threat_matrix.tolist(),
+                "patrol_points": patrol_points,
+                "matrix_shape": list(threat_matrix.shape),
+                "image_size": [img_width, img_height],
+                "path_coords": path_coords,
+                "best_path_length": best_path_length,
+                "heatmap_url": heatmap_url,
+                "pathmap_url": pathmap_url,
+            }
+        )
+
+    except Exception as e:
+        logging.error(f"获取威胁数据失败: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ========================== 健康检查 ==========================
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    """健康检查"""
+    return jsonify({"status": "ok", "analyzer_initialized": analyzer is not None})
+
+
+@app.route("/", methods=["GET"])
+def index():
+    """API说明页"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>TerraiNav API</title>
+        <style>
+            body { font-family: Microsoft YaHei, Arial; max-width: 800px; margin: 50px auto; padding: 20px; }
+            h1 { color: #2980b9; }
+            .api-card { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+            code { background: #e0e0e0; padding: 2px 5px; border-radius: 3px; }
+            pre { background: #282c34; color: #abb2bf; padding: 15px; border-radius: 5px; overflow-x: auto; }
+        </style>
+    </head>
+    <body>
+        <h1>🗺️ TerraiNav API</h1>
+        <p>地形威胁评估与路径规划服务</p>
+        
+        <div class="api-card">
+            <h2>1. 初始化API</h2>
+            <code>POST /api/init</code>
+            <p>需要先调用此接口初始化AI分析器</p>
+            <pre>{
+    "api_key": "your-api-key"
+}</pre>
+        </div>
+        
+        <div class="api-card">
+            <h2>2. 获取热力图</h2>
+            <code>POST /api/get_heatmap</code>
+            <p>输入分块字符串和地图图片，返回热力图URL</p>
+            <pre>form-data:
+    divide: "4*6"
+    map_picture: [图片文件]</pre>
+        </div>
+        
+        <div class="api-card">
+            <h2>3. 获取路径规划图</h2>
+            <code>POST /api/get_pathmap</code>
+            <p>输入威胁度矩阵，返回路径规划图URL</p>
+            <pre>{
+    "threat_matrix": [[...], [...], ...]
+}</pre>
+        </div>
+        
+        <div class="api-card">
+            <h2>4. 获取威胁数据</h2>
+            <code>POST /api/get_threat_data</code>
+            <p>输入分块字符串和地图图片，返回威胁矩阵和巡逻点信息</p>
+            <pre>form-data:
+    divide: "4*6"
+    map_picture: [图片文件]
+
+返回:
+{
+    "threat_matrix": [[...], [...], ...],
+    "patrol_points": [
+        {"rank": 1, "block": "(0,1)", "threat_score": 87.5, "pixel_coords": [200, 100], "block_position": "区块(0,1)", "threat_reason": "制高点,35°,3级,..."},
+        ...
+    ]
+}</pre>
+        </div>
+    </body>
+    </html>
+    """
+
+
+if __name__ == "__main__":
+    # 确保static/output目录存在
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+    app.run(host="0.0.0.0", port=5000, debug=True)
