@@ -262,6 +262,44 @@ MIT License - 可自由使用、修改和分发
 
 ---
 
+## 本地调试与 Railway 部署
+
+### 本地调试
+1. 进入 `backend` 目录：
+   ```bash
+   cd backend
+   ```
+2. 创建 `.env` 并填写密钥：
+   ```bash
+   copy .env.example .env
+   ```
+3. 安装 Python 依赖：
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. 运行后端服务：
+   ```bash
+   python api.py
+   ```
+5. 启动前端开发服务器：
+   ```bash
+   cd ../frontend
+   npm install
+   npm run dev
+   ```
+6. 打开浏览器访问 `http://localhost:5173`，前端默认会请求 `http://localhost:5000`。
+
+### Railway 部署
+1. 在 Railway 创建新项目并选择从仓库部署。
+2. 指定 `backend` 文件夹为部署根目录。
+3. 设置环境变量：
+   - `DASHSCOPE_API_KEY` = 你的阿里云百炼密钥
+4. Railway 会自动使用 `backend/Procfile` 启动：
+   - `web: gunicorn api:app`
+5. 部署后，前端可以通过 Vercel 的环境变量指向 Railway 后端地址。
+
+---
+
 <div align="center">
 
 **TerraiNav - 让无人机巡逻更智能**

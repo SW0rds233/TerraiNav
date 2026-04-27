@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from itertools import product
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.interpolate import RectBivariateSpline
 
 plt.rcParams["axes.unicode_minus"] = False
@@ -11,38 +12,57 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-def detect_keypoints(matrix):
-    """检测关键点：十字选点（与上下左右相邻像素比较），当前像素为十字邻域内唯一最大值
-    边缘/角落像素仅与存在的上下左右像素比较"""
+def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_per_cluster=3):
+    """
+    热力筛选 + 空间聚类 + 多点生成，平衡覆盖度和路径平滑度
+    :param quantile: 热力值分位数，降低可增加候选点
+    :param cluster_threshold: 聚类合并距离，控制聚类数量
+    :param max_points_per_cluster: 单个聚类最多生成的关键点数量
+    """
+    # 1. 热力值筛选高值点
+    danger_threshold = np.quantile(matrix, quantile)
     rows, cols = matrix.shape
+    high_value_points = []
+    for i in range(rows):
+        for j in range(cols):
+            if matrix[i, j] >= danger_threshold:
+                high_value_points.append((i, j))
+
+    if not high_value_points:
+        return []
+
+    # 2. 空间聚类
+    points_np = np.array(high_value_points)
+    Z = linkage(points_np, method='single', metric='euclidean')
+    labels = fcluster(Z, t=cluster_threshold, criterion='distance')
+
+    # 3. 对每个聚类生成多个关键点（避免只取中心点导致覆盖不足）
+    unique_labels = np.unique(labels)
     keypoints = []
-    # 遍历所有像素
-    for i, j in product(range(rows), range(cols)):
-        center_val = matrix[i, j]
-        # 收集十字邻域（上下左右）的像素值（仅保留存在的邻域像素）
-        neighbors = []
-        # 上
-        if i - 1 >= 0:
-            neighbors.append(matrix[i - 1, j])
-        # 下
-        if i + 1 < rows:
-            neighbors.append(matrix[i + 1, j])
-        # 左
-        if j - 1 >= 0:
-            neighbors.append(matrix[i, j - 1])
-        # 右
-        if j + 1 < cols:
-            neighbors.append(matrix[i, j + 1])
+    for label in unique_labels:
+        cluster_points = points_np[labels == label]
+        cluster_size = len(cluster_points)
 
-        # 若无邻域（单个像素矩阵），直接视为关键点
-        if not neighbors:
-            keypoints.append((i, j))
-            continue
+        # 根据聚类大小决定生成的关键点数量
+        if cluster_size <= 3:
+            # 小聚类：只取1个点（聚类中心）
+            center_i = np.mean(cluster_points[:, 0]).round().astype(int)
+            center_j = np.mean(cluster_points[:, 1]).round().astype(int)
+            keypoints.append((center_i, center_j))
+        else:
+            # 大聚类：按热力值高低取多个点
+            # 计算每个点的热力值
+            cluster_values = np.array([matrix[p[0], p[1]] for p in cluster_points])
+            # 按热力值降序排序
+            sorted_idx = np.argsort(-cluster_values)
+            # 取前N个点，N不超过max_points_per_cluster
+            take_n = min(max_points_per_cluster, cluster_size)
+            selected_points = cluster_points[sorted_idx[:take_n]]
+            for p in selected_points:
+                keypoints.append((p[0], p[1]))
 
-        # 验证当前像素是十字邻域内的唯一最大值
-        max_neighbor = max(neighbors)
-        if center_val > max_neighbor:  # 严格大于所有邻域像素
-            keypoints.append((i, j))
+    print(f"✅ 自动计算阈值：≥ {danger_threshold:.2f}")
+    print(f"   筛选到高值点：{len(high_value_points)} 个 → 聚类后关键点：{len(keypoints)} 个")
     return keypoints
 
 

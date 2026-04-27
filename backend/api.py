@@ -68,6 +68,33 @@ def parse_divide(divide_str):
         raise ValueError(f"分块字符串解析失败: {e}")
 
 
+def parse_start_point(start_point_str, rows, cols, default=(0, 0)):
+    """解析起始区块字段，如 '1,1' -> (1, 1)"""
+    if not start_point_str:
+        return default
+
+    try:
+        parts = [p.strip() for p in start_point_str.split(",") if p.strip()]
+        if len(parts) != 2:
+            raise ValueError("起始区块格式错误，应为 '行,列'，如 '1,1'")
+        start_row = int(parts[0])
+        start_col = int(parts[1])
+        if start_row < 0 or start_col < 0 or start_row >= rows or start_col >= cols:
+            raise ValueError(
+                f"起始区块超出范围，应在 0-{rows-1}, 0-{cols-1} 之间"
+            )
+        return (start_row, start_col)
+    except Exception as e:
+        raise ValueError(f"起始区块解析失败: {e}")
+
+
+def json_safe_point(point):
+    """Convert a coordinate tuple to JSON-safe [int, int] list."""
+    if point is None:
+        return None
+    return [int(point[0]), int(point[1])]
+
+
 def save_upload_file(file):
     """保存上传的图片文件"""
     if file is None:
@@ -184,15 +211,18 @@ def get_heatmap():
         logging.info(f"威胁矩阵构建完成: {threat_matrix.shape}")
 
         # 6. 检测关键点并生成路径
-        from scipy.ndimage import zoom
         keypoints = planner.detect_keypoints(threat_matrix)
-        
+
         path_coords = None
         best_path_length = 0
-        
+
         if keypoints:
-            # 加入起点（从前端读入）
-            start_point = request.form.get("start_point") or request.json.get("start_point") or request.get_json().get("start_point")
+            start_point_str = (
+                request.form.get("start_point")
+                or (request.get_json(silent=True) or {}).get("start_point")
+                or "0,0"
+            )
+            start_point = parse_start_point(start_point_str, rows, cols)
             all_points = [start_point] + keypoints
             aco = planner.ACO_TSP(all_points, ant_num=50, max_iter=200)
             best_path, best_len = aco.run()
@@ -218,10 +248,12 @@ def get_heatmap():
                 "success": True,
                 "heatmap_url": heatmap_url,
                 "pathmap_url": pathmap_url,
-                "matrix_shape": list(threat_matrix.shape),
-                "original_size": [img_width, img_height],
-                "path_coords": path_coords,
-                "best_path_length": best_path_length,
+                "matrix_shape": [int(threat_matrix.shape[0]), int(threat_matrix.shape[1])],
+                "original_size": [int(img_width), int(img_height)],
+                "path_coords": [json_safe_point(pt) for pt in path_coords]
+                if path_coords
+                else None,
+                "best_path_length": float(best_path_length),
             }
         )
 
@@ -282,7 +314,9 @@ def get_pathmap():
                 "pathmap_url": pathmap_url,
                 "keypoints_count": len(keypoints),
                 "best_path_length": float(best_len),
-                "path_coords": path_coords,
+                "path_coords": [json_safe_point(pt) for pt in path_coords]
+                if path_coords
+                else None,
             }
         )
 
@@ -381,19 +415,19 @@ def get_threat_data():
             # 图上坐标（转换到原图像素坐标）
             block_width = img_width // cols
             block_height = img_height // rows
-            pixel_x = block_col * block_width + block_width // 2
-            pixel_y = block_row * block_height + block_height // 2
+            pixel_x = int(block_col * block_width + block_width // 2)
+            pixel_y = int(block_row * block_height + block_height // 2)
             pixel_coords = [pixel_x, pixel_y]
 
             # 具体位置（区块索引）
-            block_position = f"区块({block_row}, {block_col})"
+            block_position = f"区块({int(block_row)}, {int(block_col)})"
 
             # 威胁原因分析（从df中获取该坐标的详细信息）
             # 找到对应的df记录
             threat_reason = ""
             for _, r in df.iterrows():
                 if r.get("矩阵Y") == row and r.get("矩阵X") == col:
-                    threat_reason = f"{r.get('类型', '未知')}, {r.get('坡度', '未知')}, {r.get('威胁等���', '未知')}, {r.get('备注', '')}"
+                    threat_reason = f"{r.get('类型', '未知')}, {r.get('坡度', '未知')}, {r.get('威胁等级', '未知')}, {r.get('备注', '')}"
                     break
 
             patrol_points.append(
@@ -444,12 +478,14 @@ def get_threat_data():
         return jsonify(
             {
                 "success": True,
-                "threat_matrix": threat_matrix.tolist(),
+                "threat_matrix": threat_matrix.astype(float).tolist(),
                 "patrol_points": patrol_points,
-                "matrix_shape": list(threat_matrix.shape),
-                "image_size": [img_width, img_height],
-                "path_coords": path_coords,
-                "best_path_length": best_path_length,
+                "matrix_shape": [int(threat_matrix.shape[0]), int(threat_matrix.shape[1])],
+                "image_size": [int(img_width), int(img_height)],
+                "path_coords": [json_safe_point(pt) for pt in path_coords]
+                if path_coords
+                else None,
+                "best_path_length": float(best_path_length),
                 "heatmap_url": heatmap_url,
                 "pathmap_url": pathmap_url,
             }
@@ -464,13 +500,6 @@ def get_threat_data():
 
 
 # ========================== 健康检查 ==========================
-@app.route("/api/health", methods=["GET"])
-def health_check():
-    """健康检查"""
-    return jsonify({"status": "ok", "analyzer_initialized": analyzer is not None})
-
-
-@app.route("/", methods=["GET"])
 def index():
     """API说明页"""
     return """
@@ -544,4 +573,6 @@ if __name__ == "__main__":
     # 确保static/output目录存在
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-    app.run(host="0.0.0.0", port=5000, debug=True)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)

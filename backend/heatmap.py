@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from itertools import product
 from scipy.interpolate import RectBivariateSpline
 
 plt.rcParams['axes.unicode_minus'] = False
@@ -11,40 +10,60 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-def detect_keypoints(matrix):
-    """检测关键点：十字选点（与上下左右相邻像素比较），当前像素为十字邻域内唯一最大值
-    边缘/角落像素仅与存在的上下左右像素比较"""
+from scipy.cluster.hierarchy import fcluster, linkage
+
+def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_per_cluster=3):
+    """
+    热力筛选 + 空间聚类 + 多点生成，平衡覆盖度和路径平滑度
+    :param quantile: 热力值分位数，降低可增加候选点
+    :param cluster_threshold: 聚类合并距离，控制聚类数量
+    :param max_points_per_cluster: 单个聚类最多生成的关键点数量
+    """
+    # 1. 热力值筛选高值点
+    danger_threshold = np.quantile(matrix, quantile)
     rows, cols = matrix.shape
+    high_value_points = []
+    for i in range(rows):
+        for j in range(cols):
+            if matrix[i, j] >= danger_threshold:
+                high_value_points.append((i, j))
+
+    if not high_value_points:
+        return []
+
+    # 2. 空间聚类
+    points_np = np.array(high_value_points)
+    Z = linkage(points_np, method='single', metric='euclidean')
+    labels = fcluster(Z, t=cluster_threshold, criterion='distance')
+
+    # 3. 对每个聚类生成多个关键点（避免只取中心点导致覆盖不足）
+    unique_labels = np.unique(labels)
     keypoints = []
-    # 遍历所有像素
-    for i, j in product(range(rows), range(cols)):
-        center_val = matrix[i, j]
-        # 收集十字邻域（上下左右）的像素值（仅保留存在的邻域像素）
-        neighbors = []
-        # 上
-        if i - 1 >= 0:
-            neighbors.append(matrix[i - 1, j])
-        # 下
-        if i + 1 < rows:
-            neighbors.append(matrix[i + 1, j])
-        # 左
-        if j - 1 >= 0:
-            neighbors.append(matrix[i, j - 1])
-        # 右
-        if j + 1 < cols:
-            neighbors.append(matrix[i, j + 1])
+    for label in unique_labels:
+        cluster_points = points_np[labels == label]
+        cluster_size = len(cluster_points)
 
-        # 若无邻域（单个像素矩阵），直接视为关键点
-        if not neighbors:
-            keypoints.append((i, j))
-            continue
+        # 根据聚类大小决定生成的关键点数量
+        if cluster_size <= 3:
+            # 小聚类：只取1个点（聚类中心）
+            center_i = np.mean(cluster_points[:, 0]).round().astype(int)
+            center_j = np.mean(cluster_points[:, 1]).round().astype(int)
+            keypoints.append((center_i, center_j))
+        else:
+            # 大聚类：按热力值高低取多个点
+            # 计算每个点的热力值
+            cluster_values = np.array([matrix[p[0], p[1]] for p in cluster_points])
+            # 按热力值降序排序
+            sorted_idx = np.argsort(-cluster_values)
+            # 取前N个点，N不超过max_points_per_cluster
+            take_n = min(max_points_per_cluster, cluster_size)
+            selected_points = cluster_points[sorted_idx[:take_n]]
+            for p in selected_points:
+                keypoints.append((p[0], p[1]))
 
-        # 验证当前像素是十字邻域内的唯一最大值
-        max_neighbor = max(neighbors)
-        if center_val > max_neighbor:  # 严格大于所有邻域像素
-            keypoints.append((i, j))
+    print(f"✅ 自动计算阈值：≥ {danger_threshold:.2f}")
+    print(f"   筛选到高值点：{len(high_value_points)} 个 → 聚类后关键点：{len(keypoints)} 个")
     return keypoints
-
 
 class ACO_TSP:
     """蚁群算法求解TSP问题"""
@@ -168,12 +187,12 @@ def add_direction_indicators(ax, path_coords, interval=5, arrow_length=0.4, arro
 if __name__ == "__main__":
     # 输入矩阵
     grid = np.array([
-        [44.12, 63.65, 55.24, 44.87, 48.38, 48.38, 73.9],
-        [53.4, 74.12, 43.15, 48.38, 56.78, 65.64, 76.16],
-        [62.67, 61.14, 44.82, 63.45, 55.72, 69.04, 48.51],
-        [63.56, 69.3, 62.78, 47.11, 65.56, 62.5, 65.93],
-        [48.38, 71.74, 56.08, 48.38, 56.08, 57.26, 53.1],
-        [59.8, 67.52, 48.38, 58.66, 48.38, 63.68, 58.43]
+        [60.28, 25.48, 65.4, 44.41, 52.74, 65.66, 74.52, 57.76],
+        [57.19, 64.25, 79.51, 57.19, 65.95, 69.04, 66.81, 66.55],
+        [63.67, 56.03, 78.72, 63.28, 68.12, 62.48, 82.9, 62.58],
+        [67.54, 60.22, 42.79, 68.12, 57.55, 79.21, 74.87, 48.72],
+        [78.72, 73.14, 83.93, 59.45, 89.01, 74.09, 56.45, 65.4],
+        [78.71, 58.88, 73.14, 57.76, 88.36, 48.14, 63.59, 76.99]
     ])
 
     print("输入二维表格：")
