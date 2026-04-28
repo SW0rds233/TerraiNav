@@ -32,8 +32,14 @@ logging.basicConfig(
 )
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-# CORS配置（允许所有跨域）
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# CORS配置（允许所有跨域、支持自定义请求头）
+CORS(
+    app,
+    resources={r"/api/*": {"origins": "*"}},
+    supports_credentials=True,
+    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+    expose_headers=["Content-Type", "X-API-Key", "Authorization"],
+)
 
 # 路径配置
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -500,6 +506,7 @@ def get_threat_data():
 
 
 # ========================== 健康检查 ==========================
+@app.route("/")
 def index():
     """API说明页"""
     return """

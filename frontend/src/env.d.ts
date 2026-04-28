@@ -12,12 +12,13 @@ declare module '*.vue' {
 interface ImportMetaEnv {
   readonly VITE_APP_VERSION: string
   readonly VITE_APP_TITLE: string
+  readonly VITE_API_BASE_URL: string
   readonly VITE_API_URL: string
   readonly MODE: string
   readonly DEV: boolean
   readonly PROD: boolean
   readonly SSR: boolean
-  
+
   // 兼容旧的 Vue CLI 环境变量
   readonly NODE_ENV?: string
   readonly VUE_APP_VERSION?: string
