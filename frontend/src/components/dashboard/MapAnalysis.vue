@@ -591,7 +591,10 @@ apiClient.interceptors.request.use(
 
     // 如果请求是 FormData，删除已存在的 Content-Type，让浏览器自动设置 boundary
     if (config.data instanceof FormData) {
-      delete config.headers['Content-Type']
+      if (config.headers) {
+        delete config.headers['Content-Type']
+        delete config.headers['content-type']
+      }
     } else {
       config.headers['Content-Type'] = 'application/json'
     }

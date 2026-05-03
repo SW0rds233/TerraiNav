@@ -33,12 +33,15 @@ logging.basicConfig(
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 # CORS配置（允许所有跨域、支持自定义请求头）
+app.config["CORS_HEADERS"] = "Content-Type, X-API-Key, Authorization"
+app.config["CORS_SUPPORTS_CREDENTIALS"] = False
+
 CORS(
     app,
     resources={r"/api/*": {"origins": "*"}},
     supports_credentials=False,
-    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
-    expose_headers=["Content-Type", "X-API-Key", "Authorization"],
+    allow_headers="*",
+    expose_headers="*",
 )
 
 @app.after_request
@@ -46,7 +49,13 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Credentials"] = "false"
+    response.headers["Access-Control-Max-Age"] = "86400"
     return response
+
+@app.route("/api/<path:path>", methods=["OPTIONS"])
+def api_options(path):
+    return "", 204
 
 # 路径配置
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
