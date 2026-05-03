@@ -36,10 +36,17 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 CORS(
     app,
     resources={r"/api/*": {"origins": "*"}},
-    supports_credentials=True,
+    supports_credentials=False,
     allow_headers=["Content-Type", "X-API-Key", "Authorization"],
     expose_headers=["Content-Type", "X-API-Key", "Authorization"],
 )
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
 
 # 路径配置
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

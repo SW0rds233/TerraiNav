@@ -631,11 +631,7 @@ const fetchThreatData = async (divide, imageFile) => {
   formData.append('map_picture', imageFile)
   formData.append('start_point', droneParams.value.startPoint)
 
-  const response = await apiClient.post('/api/get_threat_data', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  })
+  const response = await apiClient.post('/api/get_threat_data', formData)
   return response.data
 }
 
@@ -645,11 +641,7 @@ const fetchHeatmap = async (divide, imageFile) => {
   formData.append('divide', divide)
   formData.append('map_picture', imageFile)
 
-  const response = await apiClient.post('/api/get_heatmap', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  })
+  const response = await apiClient.post('/api/get_heatmap', formData)
   return response.data
 }
 
