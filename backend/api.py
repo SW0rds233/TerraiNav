@@ -14,6 +14,7 @@ import uuid
 import json
 import base64
 import io
+import threading
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -72,6 +73,10 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 analyzer = None
 assessor = TerrainAssessor()
 planner = PathPlanner()
+
+# 后端任务管理
+TASKS = {}
+TASK_LOCK = threading.Lock()
 
 
 # ========================== 工具函数 ==========================
@@ -153,6 +158,175 @@ def get_image_size(filepath):
     """获取图片尺寸 (width, height)"""
     with Image.open(filepath) as img:
         return img.size  # (width, height)
+
+
+def create_task_record(task_type, payload):
+    task_id = uuid.uuid4().hex
+    record = {
+        "task_id": task_id,
+        "task_type": task_type,
+        "status": "pending",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "progress": "pending",
+        "result": None,
+        "error": None,
+        "payload": payload,
+    }
+    with TASK_LOCK:
+        TASKS[task_id] = record
+    return task_id, record
+
+
+def update_task_record(task_id, **fields):
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        if not task:
+            return
+        task.update(fields)
+        task["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    return task
+
+
+def get_task_record(task_id):
+    with TASK_LOCK:
+        return TASKS.get(task_id)
+
+
+def build_threat_result(task_id, filename, img_width, img_height, rows, cols, start_point):
+    """重用现有威胁数据处理逻辑，返回结果字典。"""
+    task = get_task_record(task_id)
+    if not task:
+        raise ValueError("任务不存在")
+
+    payload = task["payload"]
+    analyzer_local = payload["analyzer"]
+    assessor_local = payload["assessor"]
+    planner_local = payload["planner"]
+
+    update_task_record(task_id, progress="AI地形分析中")
+    logging.info("开始AI地形分析...")
+    terrain_data = analyzer_local.analyze_terrain(
+        image_path=filename,
+        rows=rows,
+        cols=cols,
+        max_workers=2,
+    )
+
+    logging.info(f"AI分析完成，识别到 {len(terrain_data)} 个地形要素")
+    update_task_record(task_id, progress="AI分析完成，开始威胁评估")
+
+    # 威胁评估
+    df, unique_x, unique_y = assessor_local.assess_terrain(terrain_data)
+    threat_matrix = assessor_local.build_threat_matrix(df, unique_x, unique_y)
+
+    logging.info(f"威胁矩阵构建完成: {threat_matrix.shape}")
+    update_task_record(task_id, progress="威胁矩阵构建完成，开始关键点检测")
+
+    # 检测关键点
+    keypoints = planner_local.detect_keypoints(threat_matrix)
+
+    patrol_points = []
+    for idx, (row, col) in enumerate(keypoints):
+        rank = idx + 1
+        block_row = row
+        block_col = col
+        threat_score = float(threat_matrix[row, col])
+        block_width = img_width // cols
+        block_height = img_height // rows
+        pixel_x = int(block_col * block_width + block_width // 2)
+        pixel_y = int(block_row * block_height + block_height // 2)
+        pixel_coords = [pixel_x, pixel_y]
+        block_position = f"区块({int(block_row)}, {int(block_col)})"
+        threat_reason = ""
+        for _, r in df.iterrows():
+            if r.get("矩阵Y") == row and r.get("矩阵X") == col:
+                threat_reason = f"{r.get('类型', '未知')}, {r.get('坡度', '未知')}, {r.get('威胁等级', '未知')}, {r.get('备注', '')}"
+                break
+        patrol_points.append(
+            {
+                "rank": rank,
+                "block": f"({block_row}, {block_col})",
+                "threat_score": threat_score,
+                "pixel_coords": pixel_coords,
+                "block_position": block_position,
+                "threat_reason": threat_reason,
+            }
+        )
+
+    patrol_points.sort(key=lambda x: x["threat_score"], reverse=True)
+    for idx, pt in enumerate(patrol_points):
+        pt["rank"] = idx + 1
+
+    logging.info(f"巡逻点信息构建完成: {len(patrol_points)} 个点")
+    update_task_record(task_id, progress="关键点检测完成，开始生成热力图")
+
+    output_size = (img_width, img_height)
+    fig_heatmap = planner_local.get_pure_heatmap(threat_matrix, output_size)
+    heatmap_url = save_output_image(fig_heatmap, "heatmap")
+    logging.info(f"热力图生成完成: {heatmap_url}")
+    update_task_record(task_id, progress="热力图生成完成")
+
+    path_coords = None
+    best_path_length = 0
+    pathmap_url = ""
+    if keypoints:
+        update_task_record(task_id, progress="开始路径规划")
+        all_points = [start_point] + keypoints
+        aco = planner_local.ACO_TSP(all_points, ant_num=50, max_iter=200)
+        best_path, best_len = aco.run()
+        path_coords = [all_points[idx] for idx in best_path]
+        best_path_length = float(best_len)
+        logging.info(f"路径规划完成: {len(path_coords)} 个点, 长度: {best_path_length:.2f}")
+        update_task_record(task_id, progress="路径规划完成，正在生成路径图")
+        fig_path = planner_local.get_pure_pathmap(threat_matrix, path_coords, output_size)
+        pathmap_url = save_output_image(fig_path, "pathmap")
+        logging.info(f"路径图生成完成: {pathmap_url}")
+        update_task_record(task_id, progress="路径图生成完成")
+
+    return {
+        "success": True,
+        "threat_matrix": threat_matrix.astype(float).tolist(),
+        "patrol_points": patrol_points,
+        "matrix_shape": [int(threat_matrix.shape[0]), int(threat_matrix.shape[1])],
+        "image_size": [int(img_width), int(img_height)],
+        "path_coords": [json_safe_point(pt) for pt in path_coords] if path_coords else None,
+        "best_path_length": float(best_path_length),
+        "heatmap_url": heatmap_url,
+        "pathmap_url": pathmap_url,
+    }
+
+
+def process_threat_task(task_id):
+    task = get_task_record(task_id)
+    if not task:
+        return
+
+    payload = task["payload"]
+    image_path = payload["image_path"]
+    img_width = payload["img_width"]
+    img_height = payload["img_height"]
+    rows = payload["rows"]
+    cols = payload["cols"]
+    start_point = payload["start_point"]
+
+    update_task_record(task_id, status="running", progress="任务执行中")
+    try:
+        result = build_threat_result(
+            task_id,
+            image_path,
+            img_width,
+            img_height,
+            rows,
+            cols,
+            start_point,
+        )
+        update_task_record(task_id, status="completed", progress="完成", result=result)
+    except Exception as e:
+        logging.error(f"后台任务失败: {e}")
+        import traceback
+        traceback.print_exc()
+        update_task_record(task_id, status="failed", progress="失败", error=str(e))
 
 
 # ========================== API 1: 热力图 ==========================
@@ -354,16 +528,13 @@ def get_pathmap():
 @app.route("/api/get_threat_data", methods=["POST"])
 def get_threat_data():
     """
-    API 3: 获取威胁度矩阵和巡逻点信息
-    输入: divide (分块字符串如 "4*6"), map_picture (地图图片文件), start_point (起始区块如 "1,1")
-    输出: threat_matrix (威胁度矩阵), patrol_points (巡逻点信息列表)
-
-    巡逻点信息格式: [排序，所属区块，威胁度，图上坐标，具体位置，威胁原因分析]
+    API 3: 启动威胁分析后台任务
+    输入: divide, map_picture, start_point
+    返回: task_id
     """
     global analyzer
 
     try:
-        # 1. 获取参数
         divide = request.form.get("divide", "").strip()
         map_file = request.files.get("map_picture")
         start_point_str = request.form.get("start_point", "0,0").strip()
@@ -373,14 +544,10 @@ def get_threat_data():
         if not map_file:
             return jsonify({"success": False, "error": "地图图片不能为空"}), 400
         if analyzer is None:
-            return jsonify(
-                {"success": False, "error": "请先调用 /api/init 初始化API"}
-            ), 400
+            return jsonify({"success": False, "error": "请先调用 /api/init 初始化API"}), 400
 
-        # 2. 解析分块参数
         rows, cols = parse_divide(divide)
 
-        # 3. 解析起始区块参数
         try:
             start_parts = start_point_str.split(",")
             if len(start_parts) != 2:
@@ -393,7 +560,6 @@ def get_threat_data():
         except Exception as e:
             raise ValueError(f"起始区块参数解析失败: {e}")
 
-        # 4. 保存上传的图片
         image_path = save_upload_file(map_file)
         img_width, img_height = get_image_size(image_path)
 
@@ -401,124 +567,45 @@ def get_threat_data():
         logging.info(f"分块: {rows} x {cols}")
         logging.info(f"起始区块: {start_point}")
 
-        # 4. 调用AI分析地形
-        logging.info("开始AI地形分析...")
-        terrain_data = analyzer.analyze_terrain(
-            image_path=image_path,
-            rows=rows,
-            cols=cols,
-            max_workers=2,
-        )
+        payload = {
+            "analyzer": analyzer,
+            "assessor": assessor,
+            "planner": planner,
+            "image_path": image_path,
+            "img_width": img_width,
+            "img_height": img_height,
+            "rows": rows,
+            "cols": cols,
+            "start_point": start_point,
+        }
+        task_id, _ = create_task_record("get_threat_data", payload)
+        worker = threading.Thread(target=process_threat_task, args=(task_id,), daemon=True)
+        worker.start()
 
-        logging.info(f"AI分析完成，识别到 {len(terrain_data)} 个地形要素")
-
-        # 5. 威胁评估
-        df, unique_x, unique_y = assessor.assess_terrain(terrain_data)
-        threat_matrix = assessor.build_threat_matrix(df, unique_x, unique_y)
-
-        logging.info(f"威胁矩阵构建完成: {threat_matrix.shape},{threat_matrix}")
-
-        # 6. 检测关键点（巡逻点）
-        keypoints = planner.detect_keypoints(threat_matrix)
-
-        # 7. 构建巡逻点信息
-        patrol_points = []
-        for idx, (row, col) in enumerate(keypoints):
-            # 排序（从1开始）
-            rank = idx + 1
-
-            # 所属区块 (block_row, block_col)
-            block_row = row
-            block_col = col
-
-            # 威胁度
-            threat_score = float(threat_matrix[row, col])
-
-            # 图上坐标（转换到原图像素坐标）
-            block_width = img_width // cols
-            block_height = img_height // rows
-            pixel_x = int(block_col * block_width + block_width // 2)
-            pixel_y = int(block_row * block_height + block_height // 2)
-            pixel_coords = [pixel_x, pixel_y]
-
-            # 具体位置（区块索引）
-            block_position = f"区块({int(block_row)}, {int(block_col)})"
-
-            # 威胁原因分析（从df中获取该坐标的详细信息）
-            # 找到对应的df记录
-            threat_reason = ""
-            for _, r in df.iterrows():
-                if r.get("矩阵Y") == row and r.get("矩阵X") == col:
-                    threat_reason = f"{r.get('类型', '未知')}, {r.get('坡度', '未知')}, {r.get('威胁等级', '未知')}, {r.get('备注', '')}"
-                    break
-
-            patrol_points.append(
-                {
-                    "rank": rank,
-                    "block": f"({block_row}, {block_col})",
-                    "threat_score": threat_score,
-                    "pixel_coords": pixel_coords,
-                    "block_position": block_position,
-                    "threat_reason": threat_reason,
-                }
-            )
-
-        # 按威胁度排序
-        patrol_points.sort(key=lambda x: x["threat_score"], reverse=True)
-        for idx, pt in enumerate(patrol_points):
-            pt["rank"] = idx + 1
-
-        logging.info(f"巡逻点信息构建完成: {len(patrol_points)} 个点")
-
-        # ===== 8. 生成热力图（与原图尺寸一致，无坐标轴图例）=====
-        heatmap_url = ""
-        output_size = (img_width, img_height)
-        fig_heatmap = planner.get_pure_heatmap(threat_matrix, output_size)
-        heatmap_url = save_output_image(fig_heatmap, "heatmap")
-        logging.info(f"热力图生成完成: {heatmap_url}")
-
-        # ===== 9. 路径规划 (ACO) =====
-        path_coords = None
-        best_path_length = 0
-        pathmap_url = ""
-        
-        if keypoints:
-            # 加入用户指定的起点
-            all_points = [start_point] + keypoints
-            aco = planner.ACO_TSP(all_points, ant_num=50, max_iter=200)
-            best_path, best_len = aco.run()
-            path_coords = [all_points[idx] for idx in best_path]
-            best_path_length = float(best_len)
-            
-            logging.info(f"路径规划完成: {len(path_coords)} 个点, 长度: {best_path_length:.2f}")
-            
-            # 生成纯路径图（与原图尺寸一致，无坐标轴图例）
-            fig_path = planner.get_pure_pathmap(threat_matrix, path_coords, output_size)
-            pathmap_url = save_output_image(fig_path, "pathmap")
-            logging.info(f"路径图生成完成: {pathmap_url}")
-
-        return jsonify(
-            {
-                "success": True,
-                "threat_matrix": threat_matrix.astype(float).tolist(),
-                "patrol_points": patrol_points,
-                "matrix_shape": [int(threat_matrix.shape[0]), int(threat_matrix.shape[1])],
-                "image_size": [int(img_width), int(img_height)],
-                "path_coords": [json_safe_point(pt) for pt in path_coords]
-                if path_coords
-                else None,
-                "best_path_length": float(best_path_length),
-                "heatmap_url": heatmap_url,
-                "pathmap_url": pathmap_url,
-            }
-        )
+        return jsonify({"success": True, "task_id": task_id, "status": "pending"})
 
     except Exception as e:
         logging.error(f"获取威胁数据失败: {e}")
         import traceback
-
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/task_status/<task_id>", methods=["GET"])
+def task_status(task_id):
+    task = get_task_record(task_id)
+    if not task:
+        return jsonify({"success": False, "error": "任务不存在"}), 404
+
+    response = {
+        "success": True,
+        "task_id": task_id,
+        "status": task["status"],
+        "progress": task["progress"],
+        "error": task["error"],
+        "result": task["result"] if task["status"] == "completed" else None,
+    }
+    return jsonify(response)
 
 
 # ========================== 健康检查 ==========================

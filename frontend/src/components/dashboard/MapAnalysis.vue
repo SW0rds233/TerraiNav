@@ -140,6 +140,12 @@
             <span v-if="analyzing" class="analyzing">分析中...</span>
             <span v-else>开始智能分析</span>
           </button>
+          <div class="analysis-progress" v-if="analysisProgress.status !== 'idle'">
+            <div class="progress-text">{{ analysisProgress.message }}</div>
+            <div class="progress-bar">
+              <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+            </div>
+          </div>
           <div class="analysis-tip">
             {{ analysisTip }}
           </div>
@@ -633,6 +639,37 @@ const initApi = async (apiKey) => {
 }
 
 // 获取威胁数据（包含热力图和路径图）
+const waitForTaskResult = async (taskId, interval = 2000, timeoutMs = 240000) => {
+  const startTime = Date.now()
+  while (true) {
+    const response = await apiClient.get(`/api/task_status/${taskId}`)
+    const data = response.data
+
+    if (!data.success) {
+      throw new Error(data.error || '查询任务状态失败')
+    }
+
+    analysisProgress.value = {
+      status: data.status,
+      message: data.progress || '正在分析中，请稍候...',
+    }
+
+    if (data.status === 'completed') {
+      return data.result
+    }
+
+    if (data.status === 'failed') {
+      throw new Error(data.error || '分析任务执行失败')
+    }
+
+    if (Date.now() - startTime > timeoutMs) {
+      throw new Error('任务超时，请稍后重试')
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, interval))
+  }
+}
+
 const fetchThreatData = async (divide, imageFile) => {
   const formData = new FormData()
   formData.append('divide', divide)
@@ -640,7 +677,13 @@ const fetchThreatData = async (divide, imageFile) => {
   formData.append('start_point', droneParams.value.startPoint)
 
   const response = await apiClient.post('/api/get_threat_data', formData)
-  return response.data
+  const data = response.data
+
+  if (!data.success) {
+    throw new Error(data.error || '任务启动失败')
+  }
+
+  return await waitForTaskResult(data.task_id)
 }
 
 // 获取热力图URL
@@ -672,6 +715,10 @@ const analysisResult = ref({
   stats: null,
   threatPoints: [],
   threatStats: null,
+})
+const analysisProgress = ref({
+  status: 'idle',
+  message: '准备分析',
 })
 const activeTab = ref('original')
 const fileInput = ref(null)
@@ -710,33 +757,8 @@ const droneParams = ref({
   gridBlocks: '4 * 4',
 })
 
-// 最近任务（模拟数据）
-const recentTasks = ref([
-  {
-    id: 1,
-    name: '山区地形分析',
-    time: '今天 14:30',
-    status: 'success',
-    statusText: '完成',
-    thumbnail: '/pictures/background1.jpg',
-  },
-  {
-    id: 2,
-    name: '城区巡逻路径',
-    time: '昨天 10:15',
-    status: 'processing',
-    statusText: '处理中',
-    thumbnail: '/pictures/background1.jpg',
-  },
-  {
-    id: 3,
-    name: '森林区域评估',
-    time: '前天 16:45',
-    status: 'success',
-    statusText: '完成',
-    thumbnail: '/pictures/background1.jpg',
-  },
-])
+// 最近任务列表
+const recentTasks = ref([])
 
 // 计算属性
 const canAnalyze = computed(() => {
@@ -746,8 +768,26 @@ const canAnalyze = computed(() => {
 const analysisTip = computed(() => {
   if (!selectedImage.value) return '请上传地图图片'
   if (!apiKey.value) return '请输入API密钥'
-  if (analyzing.value) return '正在分析中，请稍候...'
+  if (analyzing.value) return analysisProgress.value.message || '正在分析中，请稍候...'
+  if (analysisProgress.value.status === 'completed') return analysisProgress.value.message || '分析完成'
+  if (analysisProgress.value.status === 'failed') return analysisProgress.value.message || '分析失败'
   return '点击"开始智能分析"按钮进行分析'
+})
+
+const analysisProgressPercent = computed(() => {
+  if (analysisProgress.value.status === 'completed') return 100
+  if (analysisProgress.value.status === 'failed') return 100
+  if (analysisProgress.value.status === 'pending') return 10
+  if (analysisProgress.value.status === 'running') {
+    const text = (analysisProgress.value.message || '').toLowerCase()
+    if (text.includes('热力图')) return 80
+    if (text.includes('路径')) return 90
+    if (text.includes('关键点') || text.includes('巡逻点')) return 65
+    if (text.includes('威胁矩阵')) return 50
+    if (text.includes('ai') || text.includes('地形分析') || text.includes('分析中')) return 30
+    return 40
+  }
+  return 0
 })
 
 // 解析巡逻区块输入
@@ -1081,88 +1121,6 @@ const highlightBlock = (blockId) => {
   highlightedBlockIndex.value = index
 }
 
-// 生成模拟威胁点数据
-const generateThreatPoints = () => {
-  return [
-    {
-      id: 26,
-      rank: 1,
-      block: '4-1',
-      threatScore: 79.3,
-      threatLevel: 3,
-      coordinate: '120,340',
-      location: '左下角边缘处',
-      description: '房屋建筑区域',
-      reason: '左下角边缘处的房屋建筑，存在潜在安全风险',
-    },
-    {
-      id: 15,
-      rank: 2,
-      block: '3-2',
-      threatScore: 68.5,
-      threatLevel: 2,
-      coordinate: '280,210',
-      location: '蜿蜒道路旁',
-      description: '硬化道路连接左上与右下',
-      reason: '蜿蜒穿过区域的硬化道路，存在快速移动威胁',
-    },
-    {
-      id: 8,
-      rank: 3,
-      block: '2-3',
-      threatScore: 61.2,
-      threatLevel: 2,
-      coordinate: '180,150',
-      location: '左侧梯田区',
-      description: '地势平坦但呈阶梯状下降',
-      reason: '左侧梯田区域，地势相对平坦但呈阶梯状下降，存在视野盲区',
-    },
-    {
-      id: 19,
-      rank: 4,
-      block: '1-4',
-      threatScore: 55.8,
-      threatLevel: 1,
-      coordinate: '350,80',
-      location: '右侧茂密植被区',
-      description: '地形起伏较大，遮蔽性好',
-      reason: '右侧大面积茂密植被覆盖区，地形起伏较大，遮蔽性好',
-    },
-    {
-      id: 33,
-      rank: 5,
-      block: '3-3',
-      threatScore: 48.3,
-      threatLevel: 1,
-      coordinate: '250,240',
-      location: '道路旁独立建筑',
-      description: '红顶特征明显',
-      reason: '位于道路旁的小型独立建筑，红顶特征明显，需重点关注',
-    },
-    {
-      id: 12,
-      rank: 6,
-      block: '2-2',
-      threatScore: 35.2,
-      threatLevel: 1,
-      coordinate: '160,180',
-      location: '中部空旷区域',
-      description: '平坦开阔地带',
-      reason: '中部空旷区域，视野良好，威胁度较低',
-    },
-    {
-      id: 7,
-      rank: 7,
-      block: '4-3',
-      threatScore: 81.5,
-      threatLevel: 3,
-      coordinate: '310,320',
-      location: '右下角交叉路口',
-      description: '多条道路交汇处',
-      reason: '道路交汇处，交通复杂，存在潜在安全风险',
-    },
-  ]
-}
 
 // 开始分析 - 调用后端API
 const startAnalysis = async () => {
@@ -1172,32 +1130,38 @@ const startAnalysis = async () => {
   const startTime = Date.now()
 
   try {
-    // 确保API已初始化
-    if (!localStorage.getItem('terrainav_api_key')) {
-      localStorage.setItem('terrainav_api_key', apiKey.value)
-    }
+      analyzing.value = true
+      analysisProgress.value = {
+        status: 'pending',
+        message: '任务已提交，等待后端处理...',
+      }
 
-    // 获取divide参数 (格式: m*n)
-    const divide = droneParams.value.gridBlocks.replace(/\s*/g, '')
+      // 确保API已初始化
+      if (!localStorage.getItem('terrainav_api_key')) {
+        localStorage.setItem('terrainav_api_key', apiKey.value)
+      }
 
-    // 获取上传的图片文件
-    const fileInputEl = fileInput.value
-    const file = fileInputEl?.files?.[0]
+      // 获取divide参数 (格式: m*n)
+      const divide = droneParams.value.gridBlocks.replace(/\s*/g, '')
 
-    if (!file) {
-      throw new Error('请先上传地图图片')
-    }
+      // 获取上传的图片文件
+      const fileInputEl = fileInput.value
+      const file = fileInputEl?.files?.[0]
 
-    console.log('开始调用后端API...')
-    console.log('divide:', divide)
-    console.log('file:', file.name)
+      if (!file) {
+        throw new Error('请先上传地图图片')
+      }
 
-    // 调用后端API获取威胁数据
-    const result = await fetchThreatData(divide, file)
+      console.log('开始调用后端API...')
+      console.log('divide:', divide)
+      console.log('file:', file.name)
 
-    if (!result.success) {
-      throw new Error(result.error || '分析失败')
-    }
+      // 调用后端API获取威胁数据
+      const result = await fetchThreatData(divide, file)
+
+      analysisProgress.value = {
+        status: 'completed',
+        message: '分析完成',
 
     const endTime = Date.now()
     const timeSeconds = ((endTime - startTime) / 1000).toFixed(1)
@@ -1299,6 +1263,10 @@ const startAnalysis = async () => {
     alert(`分析完成！用时 ${timeSeconds} 秒`)
   } catch (error) {
     console.error('分析失败:', error)
+    analysisProgress.value = {
+      status: 'failed',
+      message: error.message || '分析失败，请检查后端日志',
+    }
     alert('分析失败: ' + error.message)
 
     // 添加失败任务
@@ -1763,6 +1731,30 @@ onUnmounted(() => {
     stroke-dasharray: 90, 150;
     stroke-dashoffset: -124;
   }
+}
+
+.analysis-progress {
+  margin-top: 1rem;
+}
+
+.progress-text {
+  font-size: 0.9rem;
+  color: #1f2937;
+  margin-bottom: 0.5rem;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 9999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #1a2980, #26d0ce);
+  transition: width 0.3s ease;
 }
 
 .analysis-tip {
