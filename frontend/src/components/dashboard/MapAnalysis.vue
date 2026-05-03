@@ -578,9 +578,6 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 300000, // 5分钟超时
-  headers: {
-    'Content-Type': 'application/json',
-  },
 })
 
 // 请求拦截器 - 添加API密钥到请求头
@@ -591,6 +588,14 @@ apiClient.interceptors.request.use(
     if (savedApiKey) {
       config.headers['X-API-Key'] = savedApiKey
     }
+
+    // 如果请求是 FormData，删除已存在的 Content-Type，让浏览器自动设置 boundary
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type']
+    } else {
+      config.headers['Content-Type'] = 'application/json'
+    }
+
     return config
   },
   (error) => Promise.reject(error),
