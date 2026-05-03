@@ -1162,9 +1162,10 @@ const startAnalysis = async () => {
       analysisProgress.value = {
         status: 'completed',
         message: '分析完成',
+      }
 
-    const endTime = Date.now()
-    const timeSeconds = ((endTime - startTime) / 1000).toFixed(1)
+      const endTime = Date.now()
+      const timeSeconds = ((endTime - startTime) / 1000).toFixed(1)
 
     // 处理威胁矩阵
     const threatMatrix = result.threat_matrix
