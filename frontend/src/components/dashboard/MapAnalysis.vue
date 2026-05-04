@@ -639,7 +639,7 @@ const initApi = async (apiKey) => {
 }
 
 // 获取威胁数据（包含热力图和路径图）
-const waitForTaskResult = async (taskId, interval = 2000, timeoutMs = 240000) => {
+const waitForTaskResult = async (taskId, interval = 2000, timeoutMs = 300000) => {
   const startTime = Date.now()
   while (true) {
     const response = await apiClient.get(`/api/task_status/${taskId}`)
@@ -664,7 +664,7 @@ const waitForTaskResult = async (taskId, interval = 2000, timeoutMs = 240000) =>
     }
 
     if (Date.now() - startTime > timeoutMs) {
-      throw new Error('任务超时，请稍后重试')
+      throw new Error('任务超时，请稍后重试或尝试减少分析区域分块')
     }
 
     await new Promise((resolve) => setTimeout(resolve, interval))

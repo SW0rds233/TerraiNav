@@ -140,7 +140,7 @@
 
           <div class="contact-item">
             <h3>GitHub 仓库</h3>
-            <p>https://github.com/sw0rds/my_web</p>
+            <p>https://github.com/SW0rds233/TerraiNav</p>
           </div>
         </div>
       </div>

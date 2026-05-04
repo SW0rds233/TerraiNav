@@ -14,10 +14,15 @@ warnings.filterwarnings("ignore")
 
 def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_per_cluster=3):
     """
-    热力筛选 + 空间聚类 + 多点生成，平衡覆盖度和路径平滑度
+    热力筛选 + 空间聚类 + 多点生成 + 高评分强制包含，平衡覆盖度和路径平滑度
     :param quantile: 热力值分位数，降低可增加候选点
     :param cluster_threshold: 聚类合并距离，控制聚类数量
     :param max_points_per_cluster: 单个聚类最多生成的关键点数量
+
+    逻辑说明：
+    1. 基于分位数筛选高值点并进行空间聚类
+    2. 对每个聚类生成多个关键点
+    3. 额外强制包含所有评分≥70的区块，确保高威胁区域都被覆盖
     """
     # 1. 热力值筛选高值点
     danger_threshold = np.quantile(matrix, quantile)
@@ -63,6 +68,25 @@ def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_pe
 
     print(f"✅ 自动计算阈值：≥ {danger_threshold:.2f}")
     print(f"   筛选到高值点：{len(high_value_points)} 个 → 聚类后关键点：{len(keypoints)} 个")
+
+    # 4. 额外添加所有评分超过70的区块
+    high_score_threshold = 70.0
+    high_score_points = []
+    for i in range(rows):
+        for j in range(cols):
+            if matrix[i, j] >= high_score_threshold:
+                high_score_points.append((i, j))
+
+    # 将高评分区块添加到关键点列表中（避免重复）
+    existing_keypoints = set(keypoints)
+    for point in high_score_points:
+        if point not in existing_keypoints:
+            keypoints.append(point)
+            existing_keypoints.add(point)
+
+    if high_score_points:
+        print(f"   额外添加评分≥70的区块：{len(high_score_points)} 个 → 最终关键点：{len(keypoints)} 个")
+
     return keypoints
 
 
