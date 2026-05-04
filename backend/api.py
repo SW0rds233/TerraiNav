@@ -169,6 +169,7 @@ def create_task_record(task_type, payload):
         "created_at": datetime.utcnow().isoformat() + "Z",
         "updated_at": datetime.utcnow().isoformat() + "Z",
         "progress": "pending",
+        "progress_percent": 0,
         "result": None,
         "error": None,
         "payload": payload,
@@ -204,24 +205,35 @@ def build_threat_result(task_id, filename, img_width, img_height, rows, cols, st
     assessor_local = payload["assessor"]
     planner_local = payload["planner"]
 
-    update_task_record(task_id, progress="AI地形分析中")
+    update_task_record(task_id, progress="AI地形分析中", progress_percent=5)
     logging.info("开始AI地形分析...")
+
+    def inline_progress_callback(completed, total, message):
+        percent = int(round(completed / total * 60)) if total else 50
+        update_task_record(
+            task_id,
+            status="running",
+            progress=message,
+            progress_percent=min(percent, 60),
+        )
+
     terrain_data = analyzer_local.analyze_terrain(
         image_path=filename,
         rows=rows,
         cols=cols,
         max_workers=2,
+        progress_callback=inline_progress_callback,
     )
 
     logging.info(f"AI分析完成，识别到 {len(terrain_data)} 个地形要素")
-    update_task_record(task_id, progress="AI分析完成，开始威胁评估")
+    update_task_record(task_id, progress="AI分析完成，开始威胁评估", progress_percent=65)
 
     # 威胁评估
     df, unique_x, unique_y = assessor_local.assess_terrain(terrain_data)
     threat_matrix = assessor_local.build_threat_matrix(df, unique_x, unique_y)
 
     logging.info(f"威胁矩阵构建完成: {threat_matrix.shape}")
-    update_task_record(task_id, progress="威胁矩阵构建完成，开始关键点检测")
+    update_task_record(task_id, progress="威胁矩阵构建完成，开始关键点检测", progress_percent=70)
 
     # 检测关键点
     keypoints = planner_local.detect_keypoints(threat_matrix)
@@ -259,30 +271,30 @@ def build_threat_result(task_id, filename, img_width, img_height, rows, cols, st
         pt["rank"] = idx + 1
 
     logging.info(f"巡逻点信息构建完成: {len(patrol_points)} 个点")
-    update_task_record(task_id, progress="关键点检测完成，开始生成热力图")
+    update_task_record(task_id, progress="关键点检测完成，开始生成热力图", progress_percent=75)
 
     output_size = (img_width, img_height)
     fig_heatmap = planner_local.get_pure_heatmap(threat_matrix, output_size)
     heatmap_url = save_output_image(fig_heatmap, "heatmap")
     logging.info(f"热力图生成完成: {heatmap_url}")
-    update_task_record(task_id, progress="热力图生成完成")
+    update_task_record(task_id, progress="热力图生成完成", progress_percent=90)
 
     path_coords = None
     best_path_length = 0
     pathmap_url = ""
     if keypoints:
-        update_task_record(task_id, progress="开始路径规划")
+        update_task_record(task_id, progress="开始路径规划", progress_percent=92)
         all_points = [start_point] + keypoints
         aco = planner_local.ACO_TSP(all_points, ant_num=50, max_iter=200)
         best_path, best_len = aco.run()
         path_coords = [all_points[idx] for idx in best_path]
         best_path_length = float(best_len)
         logging.info(f"路径规划完成: {len(path_coords)} 个点, 长度: {best_path_length:.2f}")
-        update_task_record(task_id, progress="路径规划完成，正在生成路径图")
+        update_task_record(task_id, progress="路径规划完成，正在生成路径图", progress_percent=94)
         fig_path = planner_local.get_pure_pathmap(threat_matrix, path_coords, output_size)
         pathmap_url = save_output_image(fig_path, "pathmap")
         logging.info(f"路径图生成完成: {pathmap_url}")
-        update_task_record(task_id, progress="路径图生成完成")
+        update_task_record(task_id, progress="路径图生成完成", progress_percent=96)
 
     return {
         "success": True,
@@ -310,7 +322,7 @@ def process_threat_task(task_id):
     cols = payload["cols"]
     start_point = payload["start_point"]
 
-    update_task_record(task_id, status="running", progress="任务执行中")
+    update_task_record(task_id, status="running", progress="任务执行中", progress_percent=1)
     try:
         result = build_threat_result(
             task_id,
@@ -321,7 +333,7 @@ def process_threat_task(task_id):
             cols,
             start_point,
         )
-        update_task_record(task_id, status="completed", progress="完成", result=result)
+        update_task_record(task_id, status="completed", progress="完成", progress_percent=100, result=result)
     except Exception as e:
         logging.error(f"后台任务失败: {e}")
         import traceback
@@ -602,6 +614,7 @@ def task_status(task_id):
         "task_id": task_id,
         "status": task["status"],
         "progress": task["progress"],
+        "progress_percent": task.get("progress_percent", 0),
         "error": task["error"],
         "result": task["result"] if task["status"] == "completed" else None,
     }

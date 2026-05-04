@@ -652,6 +652,7 @@ const waitForTaskResult = async (taskId, interval = 2000, timeoutMs = 240000) =>
     analysisProgress.value = {
       status: data.status,
       message: data.progress || '正在分析中，请稍候...',
+      progress_percent: data.progress_percent ?? analysisProgress.value.progress_percent,
     }
 
     if (data.status === 'completed') {
@@ -719,6 +720,7 @@ const analysisResult = ref({
 const analysisProgress = ref({
   status: 'idle',
   message: '准备分析',
+  progress_percent: 0,
 })
 const activeTab = ref('original')
 const fileInput = ref(null)
@@ -775,18 +777,12 @@ const analysisTip = computed(() => {
 })
 
 const analysisProgressPercent = computed(() => {
+  if (analysisProgress.value.progress_percent != null) {
+    return analysisProgress.value.progress_percent
+  }
   if (analysisProgress.value.status === 'completed') return 100
   if (analysisProgress.value.status === 'failed') return 100
-  if (analysisProgress.value.status === 'pending') return 10
-  if (analysisProgress.value.status === 'running') {
-    const text = (analysisProgress.value.message || '').toLowerCase()
-    if (text.includes('热力图')) return 80
-    if (text.includes('路径')) return 90
-    if (text.includes('关键点') || text.includes('巡逻点')) return 65
-    if (text.includes('威胁矩阵')) return 50
-    if (text.includes('ai') || text.includes('地形分析') || text.includes('分析中')) return 30
-    return 40
-  }
+  if (analysisProgress.value.status === 'pending') return 5
   return 0
 })
 
@@ -1134,6 +1130,7 @@ const startAnalysis = async () => {
       analysisProgress.value = {
         status: 'pending',
         message: '任务已提交，等待后端处理...',
+        progress_percent: 5,
       }
 
       // 确保API已初始化
@@ -1162,6 +1159,7 @@ const startAnalysis = async () => {
       analysisProgress.value = {
         status: 'completed',
         message: '分析完成',
+        progress_percent: 100,
       }
 
       const endTime = Date.now()
@@ -1267,6 +1265,7 @@ const startAnalysis = async () => {
     analysisProgress.value = {
       status: 'failed',
       message: error.message || '分析失败，请检查后端日志',
+      progress_percent: 100,
     }
     alert('分析失败: ' + error.message)
 

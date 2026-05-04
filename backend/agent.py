@@ -179,6 +179,7 @@ class TerrainAnalyzer:
         rows: Optional[int] = None,
         cols: Optional[int] = None,
         max_workers: Optional[int] = None,
+        progress_callback=None,
     ) -> List[Dict]:
         """并行分析地图
 
@@ -270,6 +271,11 @@ class TerrainAnalyzer:
             for future in as_completed(future_to_block):
                 block_id, result, error = future.result()
                 completed += 1
+                message = f"已完成 {completed}/{total} 块"
+                percent = int(round(completed / total * 60)) if total else 50
+
+                if progress_callback:
+                    progress_callback(completed, total, message)
 
                 if error:
                     print(f"[错误] 块{block_id} ({completed}/{total}): {error}")
