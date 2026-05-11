@@ -135,7 +135,7 @@
 
           <div class="contact-item">
             <h3>官方网站</h3>
-            <p>https://www.terrainav.com</p>
+            <p>https://www.sw0rds.cn</p>
           </div>
 
           <div class="contact-item">
