@@ -4,7 +4,7 @@
 // Vue 单文件组件模块声明
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
-  const component: DefineComponent<{}, {}, any>
+  const component: DefineComponent<{}, {}, unknown>
   export default component
 }
 
@@ -52,22 +52,22 @@ declare module '*.module.less' {
 
 // 声明 CSS 文件
 declare module '*.css' {
-  const css: any
+  const css: string
   export default css
 }
 
 declare module '*.scss' {
-  const scss: any
+  const scss: string
   export default scss
 }
 
 declare module '*.sass' {
-  const sass: any
+  const sass: string
   export default sass
 }
 
 declare module '*.less' {
-  const less: any
+  const less: string
   export default less
 }
 
@@ -95,7 +95,7 @@ declare module '*.gif' {
 declare module '*.svg' {
   const src: string
   export default src
-  export const ReactComponent: any
+  export const ReactComponent: unknown
 }
 
 declare module '*.ico' {

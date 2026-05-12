@@ -820,7 +820,7 @@ const parsedGridBlocks = computed(() => {
   if (!droneParams.value.gridBlocks) return { m: 0, n: 0 }
 
   const parts = droneParams.value.gridBlocks.split('*').map((part) => parseInt(part.trim()))
-  if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
+  if (parts.length !== 2 || parts[0] === undefined || parts[1] === undefined || isNaN(parts[0]) || isNaN(parts[1])) {
     return { m: 0, n: 0 }
   }
 
@@ -1259,7 +1259,7 @@ const startAnalysis = async () => {
     localStorage.setItem('terrainav_api_key', apiKey.value)
 
     // 保存历史记录到数据库
-    if (userStore.user.id) {
+    if (userStore.user.id && userStore.user.id > 0) {
       try {
         const historyData = {
           user_id: userStore.user.id,
@@ -1383,7 +1383,7 @@ const downloadImage = async (type: 'heatmap' | 'path') => {
 }
 
 const refreshTasks = async () => {
-  if (!userStore.user.id) {
+  if (!userStore.user.id || userStore.user.id <= 0) {
     console.log('用户未登录，无法加载最近任务')
     return
   }

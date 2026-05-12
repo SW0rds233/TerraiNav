@@ -24,7 +24,7 @@ app.config.errorHandler = (err, instance, info) => {
   console.error('Vue 错误:', err)
   console.error('发生在组件:', instance?.$.type?.name)
   console.error('错误信息:', info)
-  
+
   // 可以在这里添加错误报告逻辑
   if (isProduction) {
     // 生产环境错误上报
@@ -56,13 +56,13 @@ let userStore: ReturnType<typeof useUserStore> | null = null
 
 try {
   userStore = useUserStore()
-  
+
   // 初始化用户状态
   userStore.initializeUser()
-  
+
   // 应用主题
   userStore.applyTheme()
-  
+
   console.log('用户状态初始化完成', {
     isAuthenticated: userStore.isAuthenticated,
     user: userStore.user,
@@ -79,34 +79,34 @@ router.beforeEach((to, from, next) => {
     to: to.path,
     requiresAuth: to.meta?.requiresAuth
   })
-  
+
   // 重新获取用户存储实例
   if (!userStore) {
     userStore = useUserStore()
   }
-  
+
   // 检查需要认证的路由
   const requiresAuth = to.path.startsWith('/dashboard') || to.meta?.requiresAuth
-  
+
   if (requiresAuth && !userStore.isAuthenticated) {
     console.log('需要认证，但未登录，重定向到登录页')
     next('/login')
     return
   }
-  
+
   // 如果已登录但访问登录页，重定向到仪表板
   if (to.path === '/login' && userStore.isAuthenticated) {
     console.log('已登录，重定向到仪表板')
     next('/dashboard/map-analysis')
     return
   }
-  
+
   // 检查API密钥（针对需要API密钥的页面）
   if (to.meta?.requiresApiKey && !userStore.hasApiKey) {
     // 可以在这里显示提示或跳转到设置页面
     console.warn('此页面需要API密钥，但当前未配置')
   }
-  
+
   next()
 })
 
@@ -144,13 +144,13 @@ app.config.globalProperties.$filters = {
 // 开发环境工具
 if (isDevelopment) {
   // 在开发环境下暴露一些全局变量以便调试
-  ;(window as any).__VUE_APP__ = app
-  
+  ;(window as Window & { __VUE_APP__?: unknown }).__VUE_APP__ = app
+
   // 添加一个全局的重新加载函数
-  ;(window as any).reloadApp = () => {
+  ;(window as Window & { reloadApp: () => void }).reloadApp = () => {
     window.location.reload()
   }
-  
+
   console.log(`
   🚀 TerraiNav 地形适应无人机巡逻系统
   ===================================
@@ -183,7 +183,7 @@ window.addEventListener('beforeunload', () => {
 // 扩展 Window 类型
 declare global {
   interface Window {
-    __VUE_APP__: any
+    __VUE_APP__?: unknown
     reloadApp: () => void
   }
 }

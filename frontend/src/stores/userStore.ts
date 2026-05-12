@@ -98,7 +98,8 @@ export const useUserStore = defineStore('user', () => {
     } catch (error: unknown) {
       console.error('登录失败:', error)
       const err = error as Error
-      throw new Error((err as any)?.response?.data?.error || err.message || '登录失败')
+      const axiosError = error as { response?: { data?: { error?: string } } }
+      throw new Error(axiosError?.response?.data?.error || err.message || '登录失败')
     }
   }
 
@@ -119,7 +120,8 @@ export const useUserStore = defineStore('user', () => {
     } catch (error: unknown) {
       console.error('注册失败:', error)
       const err = error as Error
-      throw new Error((err as any)?.response?.data?.error || err.message || '注册失败')
+      const axiosError = error as { response?: { data?: { error?: string } } }
+      throw new Error(axiosError?.response?.data?.error || err.message || '注册失败')
     }
   }
 

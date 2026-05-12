@@ -178,7 +178,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { defineComponent, ref } from 'vue'
+
+const __name__ = 'TutorialPage'
+
+interface FAQ {
+  id: number
+  question: string
+  answer: string
+}
 
 // 激活的教程部分
 const activeSection = ref('getting-started')
@@ -193,7 +201,7 @@ const sections = [
 ]
 
 // 常见问题
-const faqs = ref([
+const faqs = ref<FAQ[]>([
   {
     id: 1,
     question: '如何获取阿里云百炼 API 密钥？',
@@ -226,10 +234,10 @@ const faqs = ref([
 ])
 
 // 展开的FAQ
-const expandedFAQ = ref(null)
+const expandedFAQ = ref<number | null>(null)
 
 // 切换FAQ展开状态
-const toggleFAQ = (id) => {
+const toggleFAQ = (id: number) => {
   if (expandedFAQ.value === id) {
     expandedFAQ.value = null
   } else {

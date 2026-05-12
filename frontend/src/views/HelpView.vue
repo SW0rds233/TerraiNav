@@ -294,7 +294,7 @@ const faqs = ref([
 ])
 
 // 展开的FAQ
-const expandedFAQ = ref(null)
+const expandedFAQ = ref<number | null>(null)
 
 // 过滤后的FAQ（根据搜索）
 const filteredFAQs = computed(() => {
@@ -309,7 +309,7 @@ const filteredFAQs = computed(() => {
 })
 
 // 切换FAQ展开状态
-const toggleFAQ = (id) => {
+const toggleFAQ = (id: number) => {
   if (expandedFAQ.value === id) {
     expandedFAQ.value = null
   } else {
@@ -321,7 +321,7 @@ const toggleFAQ = (id) => {
 const searchHelp = () => {
   if (searchQuery.value.trim()) {
     // 如果有搜索结果，展开第一个匹配的FAQ
-    if (filteredFAQs.value.length > 0) {
+    if (filteredFAQs.value.length > 0 && filteredFAQs.value[0]) {
       expandedFAQ.value = filteredFAQs.value[0].id
     }
 

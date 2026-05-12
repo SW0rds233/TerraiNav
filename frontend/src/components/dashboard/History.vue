@@ -40,9 +40,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { defineComponent, ref, onMounted } from 'vue'
 import { useUserStore } from '../../stores/userStore'
 import axios from 'axios'
+
+const __name__ = 'HistoryPage'
 
 interface HistoryTask {
   id: number
@@ -53,6 +55,23 @@ interface HistoryTask {
   status: string
   outputRouteUrl: string
   routeData: string
+}
+
+interface HistoryResponse {
+  id: number
+  task_name: string
+  created_at: string
+  input_image_url: string
+  output_route_url: string
+  route_data: string
+}
+
+interface AxiosError {
+  response?: {
+    data?: {
+      error?: string
+    }
+  }
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
@@ -67,7 +86,7 @@ onMounted(() => {
 })
 
 const loadHistories = async () => {
-  if (!userStore.user.id) {
+  if (!userStore.user.id || userStore.user.id <= 0) {
     error.value = '请先登录'
     return
   }
@@ -84,7 +103,7 @@ const loadHistories = async () => {
     })
 
     if (response.data.success) {
-      historyTasks.value = response.data.histories.map((h: any) => ({
+      historyTasks.value = response.data.histories.map((h: HistoryResponse) => ({
         id: h.id,
         name: h.task_name,
         time: h.created_at ? new Date(h.created_at).toLocaleString('zh-CN', {
@@ -105,7 +124,8 @@ const loadHistories = async () => {
     }
   } catch (err) {
     console.error('加载历史记录失败:', err)
-    error.value = (err as any)?.response?.data?.error || (err as Error).message || '加载失败'
+    const axiosError = err as AxiosError
+    error.value = axiosError?.response?.data?.error || (err as Error).message || '加载失败'
   } finally {
     loading.value = false
   }

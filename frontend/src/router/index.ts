@@ -1,9 +1,9 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocationNormalized, type NavigationGuardNext } from 'vue-router'
 
 // 路由守卫
-const authGuard = (to: any, from: any, next: any) => {
+const authGuard = (to: RouteLocationNormalized, from: RouteLocationNormalized, next: NavigationGuardNext) => {
   const token = localStorage.getItem('terrainav_token')
-  
+
   if (!token) {
     next('/login')
   } else {
