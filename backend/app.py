@@ -114,5 +114,117 @@ def run():
     except Exception as e:
         return jsonify({"error": str(e)})
 
+# ==========================
+# 数据库表结构修复端点
+# ==========================
+@app.route('/api/admin/fix-table-structure', methods=['POST'])
+def fix_table_structure():
+    """修复数据库表结构，添加缺失的字段"""
+    try:
+        from database import engine
+        from sqlalchemy import text
+        
+        results = {
+            "users_table": {"status": "unknown", "message": ""},
+            "history_table": {"status": "unknown", "message": ""}
+        }
+        
+        with engine.connect() as conn:
+            # 修复users表
+            try:
+                # 检查created_at字段是否存在
+                result = conn.execute(text("""
+                    SELECT COUNT(*) as count
+                    FROM information_schema.columns
+                    WHERE table_schema = DATABASE()
+                    AND table_name = 'users'
+                    AND column_name = 'created_at'
+                """))
+                count = result.fetchone()[0]
+                
+                if count == 0:
+                    # 添加created_at字段
+                    conn.execute(text("""
+                        ALTER TABLE users
+                        ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    """))
+                    
+                    # 为现有记录设置created_at值
+                    conn.execute(text("""
+                        UPDATE users
+                        SET created_at = NOW()
+                        WHERE created_at IS NULL
+                    """))
+                    
+                    conn.commit()
+                    results["users_table"] = {
+                        "status": "fixed",
+                        "message": "成功添加created_at字段到users表"
+                    }
+                else:
+                    results["users_table"] = {
+                        "status": "ok",
+                        "message": "users表结构完整"
+                    }
+            except Exception as e:
+                results["users_table"] = {
+                    "status": "error",
+                    "message": f"修复users表失败: {str(e)}"
+                }
+            
+            # 修复history表
+            try:
+                # 检查created_at字段是否存在
+                result = conn.execute(text("""
+                    SELECT COUNT(*) as count
+                    FROM information_schema.columns
+                    WHERE table_schema = DATABASE()
+                    AND table_name = 'history'
+                    AND column_name = 'created_at'
+                """))
+                count = result.fetchone()[0]
+                
+                if count == 0:
+                    # 添加created_at字段
+                    conn.execute(text("""
+                        ALTER TABLE history
+                        ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    """))
+                    
+                    # 为现有记录设置created_at值
+                    conn.execute(text("""
+                        UPDATE history
+                        SET created_at = NOW()
+                        WHERE created_at IS NULL
+                    """))
+                    
+                    conn.commit()
+                    results["history_table"] = {
+                        "status": "fixed",
+                        "message": "成功添加created_at字段到history表"
+                    }
+                else:
+                    results["history_table"] = {
+                        "status": "ok",
+                        "message": "history表结构完整"
+                    }
+            except Exception as e:
+                results["history_table"] = {
+                    "status": "error",
+                    "message": f"修复history表失败: {str(e)}"
+                }
+        
+        return jsonify({
+            "success": True,
+            "message": "表结构修复完成",
+            "results": results
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
