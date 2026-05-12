@@ -226,5 +226,134 @@ def fix_table_structure():
             "error": str(e)
         }), 500
 
+# ==========================
+# 用户认证诊断端点
+# ==========================
+@app.route('/api/admin/diagnose-auth', methods=['POST'])
+def diagnose_auth():
+    """诊断用户认证问题"""
+    try:
+        from database import engine, UserManager
+        from werkzeug.security import check_password_hash, generate_password_hash
+        from sqlalchemy import text
+        
+        data = request.get_json()
+        username = data.get('username', 'sw0rds')
+        test_password = data.get('password', 'qwe123456')
+        
+        results = {
+            "database_type": engine.dialect.name,
+            "database_url": str(engine.url),
+            "user_exists": False,
+            "user_info": None,
+            "password_check": None,
+            "auth_test": None,
+            "actions_taken": []
+        }
+        
+        with engine.connect() as conn:
+            # 检查用户是否存在
+            result = conn.execute(text("SELECT id, username, email, usertype, created_at, password_hash FROM users WHERE username = :username"), {"username": username})
+            user = result.fetchone()
+            
+            if user:
+                results["user_exists"] = True
+                results["user_info"] = {
+                    "id": user[0],
+                    "username": user[1],
+                    "email": user[2],
+                    "usertype": user[3],
+                    "created_at": str(user[4]) if user[4] else None
+                }
+                
+                password_hash = user[5]
+                
+                # 检查是否是明文密码
+                is_plaintext = password_hash == test_password or len(password_hash) < 50
+                results["password_check"] = {
+                    "password_hash_preview": password_hash[:50] + "..." if len(password_hash) > 50 else password_hash,
+                    "test_password": test_password,
+                    "is_plaintext": is_plaintext
+                }
+                
+                if is_plaintext:
+                    results["actions_taken"].append("检测到明文密码，需要转换为哈希")
+                    # 生成正确的密码哈希
+                    new_hash = generate_password_hash(test_password)
+                    conn.execute(text("UPDATE users SET password_hash = :hash WHERE username = :username"), 
+                                {"hash": new_hash, "username": username})
+                    conn.commit()
+                    
+                    results["actions_taken"].append("密码已转换为哈希格式")
+                    
+                    # 验证新密码
+                    result = conn.execute(text("SELECT password_hash FROM users WHERE username = :username"), {"username": username})
+                    new_password_hash = result.fetchone()[0]
+                    is_valid = check_password_hash(new_password_hash, test_password)
+                    results["password_check"]["is_valid_after_fix"] = is_valid
+                    results["password_check"]["new_hash_preview"] = new_password_hash[:50] + "..." if len(new_password_hash) > 50 else new_password_hash
+                else:
+                    # 检查密码哈希
+                    is_valid = check_password_hash(password_hash, test_password)
+                    results["password_check"]["is_valid"] = is_valid
+                    
+                    if not is_valid:
+                        # 重置密码
+                        new_hash = generate_password_hash(test_password)
+                        conn.execute(text("UPDATE users SET password_hash = :hash WHERE username = :username"), 
+                                    {"hash": new_hash, "username": username})
+                        conn.commit()
+                        
+                        results["actions_taken"].append("密码已重置")
+                        
+                        # 验证新密码
+                        result = conn.execute(text("SELECT password_hash FROM users WHERE username = :username"), {"username": username})
+                        new_password_hash = result.fetchone()[0]
+                        is_valid_now = check_password_hash(new_password_hash, test_password)
+                        results["password_check"]["is_valid_after_reset"] = is_valid_now
+                    else:
+                        results["actions_taken"].append("密码验证通过")
+                
+                # 测试完整认证流程
+                auth_user = UserManager.authenticate_user(username, test_password)
+                results["auth_test"] = {
+                    "success": auth_user is not None,
+                    "user_id": auth_user.id if auth_user else None,
+                    "username": auth_user.username if auth_user else None
+                }
+                
+                if not auth_user and is_valid:
+                    results["actions_taken"].append("密码正确但认证失败 - 可能是认证逻辑问题")
+            else:
+                results["actions_taken"].append("用户不存在 - 需要创建用户")
+                
+                # 创建用户
+                password_hash = generate_password_hash(test_password)
+                conn.execute(text("""
+                    INSERT INTO users (username, email, password_hash, usertype, created_at)
+                    VALUES (:username, :email, :password_hash, :usertype, NOW())
+                """), {
+                    "username": username,
+                    "email": f"{username}@example.com",
+                    "password_hash": password_hash,
+                    "usertype": "user"
+                })
+                conn.commit()
+                
+                results["actions_taken"].append(f"用户 {username} 已创建")
+                results["user_exists"] = True
+        
+        return jsonify({
+            "success": True,
+            "message": "诊断完成",
+            "results": results
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
