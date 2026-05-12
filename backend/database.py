@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 # 从环境变量获取数据库URL
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# 支持备用数据库URL（当主数据库不可用时使用）
+DATABASE_URL_BACKUP = os.getenv("DATABASE_URL_BACKUP")
+
 if not DATABASE_URL:
     logger.warning("DATABASE_URL 环境变量未设置，使用SQLite作为备用")
     DATABASE_URL = "sqlite:///terrainav.db"
@@ -28,9 +31,9 @@ else:
     if '@' in DATABASE_URL:
         parts = DATABASE_URL.split('@')
         host_part = parts[1] if len(parts) > 1 else parts[0]
-        logger.info(f"使用数据库: {host_part}")
+        logger.info(f"主数据库: {host_part}")
     else:
-        logger.info(f"使用数据库: {DATABASE_URL}")
+        logger.info(f"主数据库: {DATABASE_URL}")
 
 # 处理MySQL连接URL（如果使用mysql://，替换为mysql+pymysql://）
 if DATABASE_URL.startswith("mysql://"):
@@ -42,29 +45,64 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     logger.info("检测到PostgreSQL数据库，使用postgresql驱动")
 
+# 处理备用数据库URL
+if DATABASE_URL_BACKUP:
+    if DATABASE_URL_BACKUP.startswith("mysql://"):
+        DATABASE_URL_BACKUP = DATABASE_URL_BACKUP.replace("mysql://", "mysql+pymysql://", 1)
+    
+    if '@' in DATABASE_URL_BACKUP:
+        parts = DATABASE_URL_BACKUP.split('@')
+        host_part = parts[1] if len(parts) > 1 else parts[0]
+        logger.info(f"备用数据库: {host_part}")
+
 # 创建数据库引擎
 from sqlalchemy.exc import OperationalError
 
-try:
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
-    # 测试连接
+def create_database_engine(url):
+    """创建数据库引擎"""
+    return create_engine(url, pool_pre_ping=True, pool_recycle=3600)
+
+def test_database_connection(engine):
+    """测试数据库连接"""
     try:
         with engine.connect() as conn:
             conn.execute("SELECT 1")
-        logger.info("数据库连接测试成功")
+        return True
     except Exception as e:
         logger.error(f"数据库连接测试失败: {e}")
-        # 如果无法连接，降级到 SQLite
-        logger.warning("无法连接到远程数据库，降级使用本地SQLite数据库")
-        DATABASE_URL = "sqlite:///terrainav.db"
-        engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
-        logger.warning("已切换到SQLite数据库")
+        return False
 
-except OperationalError as e:
-    logger.error(f"创建数据库引擎失败: {e}")
-    logger.warning("使用本地SQLite作为后备数据库")
+# 尝试连接主数据库
+engine = None
+connection_successful = False
+
+if DATABASE_URL and not DATABASE_URL.startswith("sqlite://"):
+    engine = create_database_engine(DATABASE_URL)
+    
+    if test_database_connection(engine):
+        logger.info("主数据库连接成功")
+        connection_successful = True
+    else:
+        logger.warning("主数据库连接失败")
+        
+        # 尝试备用数据库
+        if DATABASE_URL_BACKUP:
+            logger.info("尝试连接备用数据库...")
+            engine = create_database_engine(DATABASE_URL_BACKUP)
+            
+            if test_database_connection(engine):
+                logger.info("备用数据库连接成功")
+                connection_successful = True
+                DATABASE_URL = DATABASE_URL_BACKUP
+            else:
+                logger.error("备用数据库连接也失败")
+
+# 如果所有远程数据库都失败，降级到SQLite
+if not connection_successful:
+    logger.warning("无法连接到远程数据库，降级使用本地SQLite数据库")
     DATABASE_URL = "sqlite:///terrainav.db"
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
+    engine = create_database_engine(DATABASE_URL)
+    logger.warning("已切换到SQLite数据库")
 
 # 创建会话工厂
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
