@@ -1,9 +1,12 @@
 """
 TerraiNav Web API - 地形威胁评估与路径规划服务
-提供三个核心API：
+提供核心API：
 1. /api/get_heatmap - 返回热力图图片URL
 2. /api/get_pathmap - 返回路径规划图URL
 3. /api/get_threat_data - 返回威胁度矩阵和巡逻点信息
+4. /api/auth/login - 用户登录
+5. /api/auth/register - 用户注册
+6. /api/history - 历史记录管理
 """
 
 from flask import Flask, request, jsonify, send_from_directory, url_for
@@ -21,11 +24,15 @@ matplotlib.use('Agg')
 matplotlib.interactive(False)
 from PIL import Image
 from datetime import datetime
+import secrets
 
 # 导入业务模块
 from agent import TerrainAnalyzer
 from assess import TerrainAssessor
 from path import PathPlanner
+
+# 导入数据库模块
+from database import init_db, UserManager, HistoryManager
 
 # ========================== 配置 ==========================
 logging.basicConfig(
@@ -36,6 +43,7 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 # CORS配置（允许所有跨域、支持自定义请求头）
 app.config["CORS_HEADERS"] = "Content-Type, X-API-Key, Authorization"
 app.config["CORS_SUPPORTS_CREDENTIALS"] = False
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
 
 CORS(
     app,
@@ -44,6 +52,13 @@ CORS(
     allow_headers="*",
     expose_headers="*",
 )
+
+# 初始化数据库
+try:
+    init_db()
+    logging.info("数据库初始化成功")
+except Exception as e:
+    logging.error(f"数据库初始化失败: {e}")
 
 @app.after_request
 def add_cors_headers(response):
@@ -692,10 +707,212 @@ def index():
     """
 
 
+# ========================== 用户认证API ==========================
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    """用户登录"""
+    try:
+        data = request.get_json()
+        username = data.get("username", "").strip()
+        password = data.get("password", "")
+
+        if not username or not password:
+            return jsonify({"success": False, "error": "用户名和密码不能为空"}), 400
+
+        # 验证用户
+        user = UserManager.authenticate_user(username, password)
+
+        if user:
+            # 生成token（简单实现，实际项目应使用JWT）
+            token = secrets.token_hex(32)
+            
+            return jsonify({
+                "success": True,
+                "message": "登录成功",
+                "token": token,
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "usertype": user.usertype
+                }
+            })
+        else:
+            return jsonify({"success": False, "error": "用户名或密码错误"}), 401
+
+    except Exception as e:
+        logging.error(f"登录失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/auth/register", methods=["POST"])
+def register():
+    """用户注册"""
+    try:
+        data = request.get_json()
+        username = data.get("username", "").strip()
+        email = data.get("email", "").strip()
+        password = data.get("password", "")
+
+        # 验证输入
+        if not username or not email or not password:
+            return jsonify({"success": False, "error": "用户名、邮箱和密码不能为空"}), 400
+
+        if len(username) < 3:
+            return jsonify({"success": False, "error": "用户名至少3个字符"}), 400
+
+        if len(password) < 6:
+            return jsonify({"success": False, "error": "密码至少6个字符"}), 400
+
+        # 创建用户
+        user = UserManager.create_user(username, email, password)
+
+        if user:
+            return jsonify({
+                "success": True,
+                "message": "注册成功",
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "usertype": user.usertype
+                }
+            })
+        else:
+            return jsonify({"success": False, "error": "用户名或邮箱已存在"}), 409
+
+    except Exception as e:
+        logging.error(f"注册失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ========================== 历史记录API ==========================
+@app.route("/api/history", methods=["GET"])
+def get_histories():
+    """获取用户历史记录"""
+    try:
+        user_id = request.args.get("user_id", type=int)
+        limit = request.args.get("limit", 20, type=int)
+
+        if not user_id:
+            return jsonify({"success": False, "error": "用户ID不能为空"}), 400
+
+        # 获取历史记录
+        histories = HistoryManager.get_user_histories(user_id, limit)
+
+        return jsonify({
+            "success": True,
+            "histories": [h.to_dict() for h in histories],
+            "count": len(histories)
+        })
+
+    except Exception as e:
+        logging.error(f"获取历史记录失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/history/recent", methods=["GET"])
+def get_recent_histories():
+    """获取最近的历史记录（用于首页展示）"""
+    try:
+        user_id = request.args.get("user_id", type=int)
+        limit = request.args.get("limit", 5, type=int)
+
+        if not user_id:
+            return jsonify({"success": False, "error": "用户ID不能为空"}), 400
+
+        # 获取最近的历史记录
+        histories = HistoryManager.get_recent_histories(user_id, limit)
+
+        return jsonify({
+            "success": True,
+            "histories": histories,
+            "count": len(histories)
+        })
+
+    except Exception as e:
+        logging.error(f"获取最近历史记录失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/history/<int:history_id>", methods=["GET"])
+def get_history_detail(history_id):
+    """获取历史记录详情"""
+    try:
+        history = HistoryManager.get_history_by_id(history_id)
+
+        if history:
+            return jsonify({
+                "success": True,
+                "history": history.to_dict()
+            })
+        else:
+            return jsonify({"success": False, "error": "历史记录不存在"}), 404
+
+    except Exception as e:
+        logging.error(f"获取历史记录详情失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/history", methods=["POST"])
+def create_history():
+    """创建历史记录"""
+    try:
+        data = request.get_json()
+        user_id = data.get("user_id")
+        task_name = data.get("task_name", "").strip()
+        input_image_url = data.get("input_image_url", "")
+        output_route_url = data.get("output_route_url", "")
+        route_data = data.get("route_data", "")
+
+        # 验证输入
+        if not user_id or not task_name:
+            return jsonify({"success": False, "error": "用户ID和任务名称不能为空"}), 400
+
+        # 创建历史记录
+        history = HistoryManager.create_history(
+            user_id=user_id,
+            task_name=task_name,
+            input_image_url=input_image_url,
+            output_route_url=output_route_url,
+            route_data=route_data
+        )
+
+        if history:
+            return jsonify({
+                "success": True,
+                "message": "历史记录创建成功",
+                "history": history.to_dict()
+            })
+        else:
+            return jsonify({"success": False, "error": "创建历史记录失败"}), 500
+
+    except Exception as e:
+        logging.error(f"创建历史记录失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/history/<int:history_id>", methods=["DELETE"])
+def delete_history(history_id):
+    """删除历史记录"""
+    try:
+        success = HistoryManager.delete_history(history_id)
+
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "历史记录删除成功"
+            })
+        else:
+            return jsonify({"success": False, "error": "历史记录不存在"}), 404
+
+    except Exception as e:
+        logging.error(f"删除历史记录失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     # 确保static/output目录存在
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

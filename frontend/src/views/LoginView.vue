@@ -4,31 +4,31 @@
     <div class="top-left-logo">
       <img src="/pictures/LOGO1.png" alt="TerraiNav Logo" class="logo-img" />
     </div>
-    
+
     <div class="container" :class="{ 'right-panel-active': showRegister }">
       <!-- 注册表单 -->
       <div class="container__form container--signup">
         <form class="form" id="form1" @submit.prevent="handleRegister">
           <h2 class="form__title">用户注册</h2>
-          <input 
-            v-model="registerUsername" 
-            type="text" 
-            placeholder="用户名" 
-            class="input" 
+          <input
+            v-model="registerUsername"
+            type="text"
+            placeholder="用户名"
+            class="input"
             required
           />
-          <input 
-            v-model="registerEmail" 
-            type="email" 
-            placeholder="邮箱" 
-            class="input" 
+          <input
+            v-model="registerEmail"
+            type="email"
+            placeholder="邮箱"
+            class="input"
             required
           />
-          <input 
-            v-model="registerPassword" 
-            type="password" 
-            placeholder="密码" 
-            class="input" 
+          <input
+            v-model="registerPassword"
+            type="password"
+            placeholder="密码"
+            class="input"
             required
           />
           <button class="btn" type="submit" :disabled="registering">
@@ -42,18 +42,18 @@
       <div class="container__form container--signin">
         <form class="form" id="form2" @submit.prevent="handleLogin">
           <h2 class="form__title">用户登录</h2>
-          <input 
-            v-model="loginUsername" 
-            type="text" 
-            placeholder="用户名" 
-            class="input" 
+          <input
+            v-model="loginUsername"
+            type="text"
+            placeholder="用户名"
+            class="input"
             required
           />
-          <input 
-            v-model="loginPassword" 
-            type="password" 
-            placeholder="密码" 
-            class="input" 
+          <input
+            v-model="loginPassword"
+            type="password"
+            placeholder="密码"
+            class="input"
             required
           />
           <a href="#" class="link">忘记密码？</a>
@@ -89,7 +89,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/userStore'
@@ -97,53 +97,45 @@ import { useUserStore } from '../stores/userStore'
 const router = useRouter()
 const userStore = useUserStore()
 
-// 登录表单数据
 const loginUsername = ref('')
 const loginPassword = ref('')
 
-// 注册表单数据
 const registerUsername = ref('')
 const registerEmail = ref('')
 const registerPassword = ref('')
 
-// 控制显示注册面板
 const showRegister = ref(false)
 
-// 加载状态
 const loggingIn = ref(false)
 const registering = ref(false)
 
-// 切换到登录面板
 const toggleToLogin = () => {
   showRegister.value = false
 }
 
-// 切换到注册面板
 const toggleToRegister = () => {
   showRegister.value = true
 }
 
-// 处理登录
 const handleLogin = async () => {
   console.log('登录信息:', {
     username: loginUsername.value,
     password: loginPassword.value
   })
-  
+
   if (loginUsername.value && loginPassword.value) {
     loggingIn.value = true
-    
+
     try {
-      // 调用 userStore 的登录方法
       await userStore.login(loginUsername.value, loginPassword.value)
-      
-      // 登录成功后跳转到主界面
+
       console.log('登录成功，跳转到仪表板')
       router.push('/dashboard/map-analysis')
-      
+
     } catch (error) {
       console.error('登录失败:', error)
-      alert('登录失败: ' + (error.message || '请检查用户名和密码'))
+      const errMsg = (error as Error).message || '请检查用户名和密码'
+      alert('登录失败: ' + errMsg)
     } finally {
       loggingIn.value = false
     }
@@ -152,29 +144,37 @@ const handleLogin = async () => {
   }
 }
 
-// 处理注册
-const handleRegister = () => {
+const handleRegister = async () => {
   console.log('注册信息:', {
     username: registerUsername.value,
     email: registerEmail.value,
     password: registerPassword.value
   })
-  
+
   if (registerUsername.value && registerEmail.value && registerPassword.value) {
     registering.value = true
-    
-    // 模拟注册过程
-    setTimeout(() => {
-      // 注册成功后自动切换到登录面板
-      showRegister.value = false
+
+    try {
+      await userStore.register(
+        registerUsername.value,
+        registerEmail.value,
+        registerPassword.value
+      )
+
       alert('注册成功，请登录')
-      registering.value = false
-      
-      // 清空注册表单
+      showRegister.value = false
+
       registerUsername.value = ''
       registerEmail.value = ''
       registerPassword.value = ''
-    }, 1000)
+
+    } catch (error) {
+      console.error('注册失败:', error)
+      const errMsg = (error as Error).message || '请稍后重试'
+      alert('注册失败: ' + errMsg)
+    } finally {
+      registering.value = false
+    }
   } else {
     alert('请填写完整的注册信息')
   }
@@ -246,8 +246,8 @@ const handleRegister = () => {
 }
 
 .logo-img {
-  width: 360px;  
-  height: 200px; 
+  width: 360px;
+  height: 200px;
   object-fit: contain;
   background: transparent;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
@@ -528,26 +528,26 @@ const handleRegister = () => {
   .container {
     max-width: 90%;
   }
-  
+
   .btn {
     padding: 0.9rem 2rem;
   }
-  
+
   .form {
     padding: 0 2rem;
   }
-  
+
   /* 响应式调整LOGO大小 */
   .top-left-logo {
     top: 15px;
     left: 15px;
   }
-  
+
   .logo-img {
     width: 50px;
     height: 50px;
   }
-  
+
   .bottom-left-info {
     left: 10px;
     bottom: 10px;
@@ -555,11 +555,11 @@ const handleRegister = () => {
     max-width: calc(100% - 20px);
     padding: 10px 15px;
   }
-  
+
   .copyright-info {
     font-size: 0.8rem;
   }
-  
+
   .contact-info {
     font-size: 0.75rem;
   }
@@ -569,22 +569,22 @@ const handleRegister = () => {
   .container {
     height: 500px;
   }
-  
+
   .btn {
     padding: 0.9rem 1.5rem;
   }
-  
+
   /* 响应式调整LOGO大小 */
   .top-left-logo {
     top: 10px;
     left: 10px;
   }
-  
+
   .logo-img {
     width: 40px;
     height: 40px;
   }
-  
+
   .bottom-left-info {
     left: 5px;
     bottom: 5px;

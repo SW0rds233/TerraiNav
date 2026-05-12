@@ -4,9 +4,22 @@
       <h2>历史记录</h2>
       <p>查看所有已完成的巡逻分析任务</p>
     </div>
-    
+
     <div class="history-content">
-      <div class="history-list">
+      <div v-if="loading" class="loading-state">
+        <p>加载中...</p>
+      </div>
+
+      <div v-else-if="error" class="error-state">
+        <p>{{ error }}</p>
+        <button class="btn" @click="loadHistories">重试</button>
+      </div>
+
+      <div v-else-if="historyTasks.length === 0" class="empty-state">
+        <p>暂无历史记录</p>
+      </div>
+
+      <div v-else class="history-list">
         <div v-for="task in historyTasks" :key="task.id" class="history-item">
           <div class="history-preview">
             <img :src="task.image" :alt="task.name" />
@@ -27,52 +40,76 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import { useUserStore } from '../../stores/userStore'
+import axios from 'axios'
 
-// 模拟历史任务数据
-const historyTasks = ref([
-  {
-    id: 1,
-    name: '山区地形威胁度分析',
-    time: '2026-04-15 14:30',
-    description: '完成山区地形威胁度分析，生成巡逻路径和热力图',
-    image: '/pictures/background1.jpg',
-    status: 'completed'
-  },
-  {
-    id: 2,
-    name: '城市区域巡逻规划',
-    time: '2026-04-14 10:15',
-    description: '城市区域无人机巡逻路径规划，包含多个兴趣点',
-    image: '/pictures/background1.jpg',
-    status: 'completed'
-  },
-  {
-    id: 3,
-    name: '森林火灾监测区域',
-    time: '2026-04-13 16:45',
-    description: '森林火灾监测区域的无人机巡逻路径设计',
-    image: '/pictures/background1.jpg',
-    status: 'completed'
-  },
-  {
-    id: 4,
-    name: '海岸线巡逻任务',
-    time: '2026-01-12 09:20',
-    description: '海岸线区域无人机巡逻任务，包含多个检查点',
-    image: '/pictures/background1.jpg',
-    status: 'completed'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+const userStore = useUserStore()
+
+const historyTasks = ref([])
+const loading = ref(false)
+const error = ref('')
+
+onMounted(() => {
+  loadHistories()
+})
+
+const loadHistories = async () => {
+  if (!userStore.user.id) {
+    error.value = '请先登录'
+    return
   }
-])
 
-// 查看详情
-const viewDetails = (task) => {
-  alert(`查看任务详情: ${task.name}`)
+  loading.value = true
+  error.value = ''
+
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/history`, {
+      params: {
+        user_id: userStore.user.id,
+        limit: 20
+      }
+    })
+
+    if (response.data.success) {
+      historyTasks.value = response.data.histories.map(h => ({
+        id: h.id,
+        name: h.task_name,
+        time: h.created_at ? new Date(h.created_at).toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        }) : '',
+        description: `输入图像: ${h.input_image_url || '无'}`,
+        image: h.input_image_url || '/pictures/background1.jpg',
+        status: 'completed',
+        outputRouteUrl: h.output_route_url,
+        routeData: h.route_data
+      }))
+    } else {
+      error.value = response.data.error || '加载失败'
+    }
+  } catch (err) {
+    console.error('加载历史记录失败:', err)
+    error.value = (err as any)?.response?.data?.error || (err as Error).message || '加载失败'
+  } finally {
+    loading.value = false
+  }
 }
 
-// 下载报告
+const viewDetails = (task) => {
+  alert(`查看任务详情: ${task.name}\n\n巡逻路线数据: ${task.routeData || '无'}`)
+}
+
 const downloadReport = (task) => {
-  alert(`下载任务报告: ${task.name}`)
+  if (task.outputRouteUrl) {
+    window.open(task.outputRouteUrl, '_blank')
+  } else {
+    alert('该任务没有可下载的报告')
+  }
 }
 </script>
 
@@ -184,7 +221,7 @@ const downloadReport = (task) => {
   .history-item {
     flex-direction: column;
   }
-  
+
   .history-preview {
     width: 100%;
     height: 200px;

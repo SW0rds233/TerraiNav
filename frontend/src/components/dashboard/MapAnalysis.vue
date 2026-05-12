@@ -575,6 +575,9 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import axios from 'axios'
+import { useUserStore } from '../../stores/userStore'
+
+const userStore = useUserStore()
 
 // ==================== API 配置 ====================
 // 后端API基础URL - 修改为你的后端服务地址
@@ -1237,7 +1240,35 @@ const startAnalysis = async () => {
     // 保存API密钥
     localStorage.setItem('terrainav_api_key', apiKey.value)
 
-    // 添加到最近任务
+    // 保存历史记录到数据库
+    if (userStore.user.id) {
+      try {
+        const historyData = {
+          user_id: userStore.user.id,
+          task_name: taskName.value && taskName.value.trim()
+            ? taskName.value.trim()
+            : selectedFileName.value.replace(/\.[^/.]+$/, '') + '分析',
+          input_image_url: selectedImage.value,
+          output_route_url: getImageUrl(result.pathmap_url || ''),
+          route_data: JSON.stringify({
+            patrol_points: patrolPoints,
+            path_coords: result.path_coords,
+            best_path_length: result.best_path_length
+          })
+        }
+
+        await axios.post(`${API_BASE_URL}/api/history`, historyData)
+        console.log('历史记录保存成功')
+
+        // 刷新最近任务列表
+        await refreshTasks()
+      } catch (historyError) {
+        console.error('保存历史记录失败:', historyError)
+        // 不影响主流程，只记录错误
+      }
+    }
+
+    // 添加到最近任务（本地显示）
     const newTask = {
       id: Date.now(),
       name:
@@ -1339,8 +1370,29 @@ const downloadImage = async (type) => {
   }
 }
 
-const refreshTasks = () => {
-  alert('刷新任务列表')
+const refreshTasks = async () => {
+  if (!userStore.user.id) {
+    console.log('用户未登录，无法加载最近任务')
+    return
+  }
+
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/history/recent`, {
+      params: {
+        user_id: userStore.user.id,
+        limit: 5
+      }
+    })
+
+    if (response.data.success) {
+      recentTasks.value = response.data.histories
+      console.log('最近任务加载成功:', recentTasks.value)
+    } else {
+      console.error('加载最近任务失败:', response.data.error)
+    }
+  } catch (error) {
+    console.error('加载最近任务失败:', error)
+  }
 }
 
 onMounted(() => {
@@ -1350,6 +1402,9 @@ onMounted(() => {
   }
 
   window.addEventListener('resize', handleResize)
+
+  // 加载最近任务
+  refreshTasks()
 
   // 初始计算
   nextTick(() => {
