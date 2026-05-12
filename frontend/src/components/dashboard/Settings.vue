@@ -138,7 +138,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useUserStore } from '../../stores/userStore'
 

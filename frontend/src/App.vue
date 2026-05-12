@@ -9,7 +9,7 @@
           <img src="/pictures/LOGO.png" alt="TerraiNav Logo" class="logo-img" />
         </div>
       </div>
-      
+
       <!-- 右侧：导航链接和用户信息 -->
       <div class="header-right">
         <!-- 导航链接 - 现在移到右侧 -->
@@ -19,7 +19,7 @@
           <router-link to="/about" class="nav-link">关于</router-link>
           <router-link to="/help" class="nav-link">帮助</router-link>
         </nav>
-        
+
         <!-- 用户账户状态 -->
         <div class="user-info" v-if="isLoggedIn">
           <span class="username">欢迎，{{ userStore.user.name }}</span>
@@ -27,12 +27,12 @@
         </div>
       </div>
     </header>
-    
+
     <main class="app-main" :class="{ 'login-page': isLoginPage }">
       <!-- 路由视图区域：LoginView 或 DashboardView 将在这里显示 -->
       <router-view />
     </main>
-    
+
     <!-- 全局加载状态 -->
     <div v-if="loading" class="global-loading">
       处理中，请稍候...
@@ -40,7 +40,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from './stores/userStore'
@@ -64,7 +64,7 @@ const isLoggedIn = computed(() => {
 const logout = () => {
   // 调用 userStore 的 logout 方法清除认证状态
   userStore.logout()
-  
+
   // 在组件中处理路由跳转
   router.push('/login')
 }
@@ -274,11 +274,11 @@ const logout = () => {
   .app-header {
     padding: 0.8rem 1.5rem;
   }
-  
+
   .main-nav {
     gap: 1.5rem;
   }
-  
+
   .header-right {
     gap: 2rem;
   }
@@ -290,26 +290,26 @@ const logout = () => {
     height: auto;
     padding: 0.8rem 1rem;
   }
-  
+
   .logo-container {
     width: 250px;
     height: 100px;
   }
-  
+
   .header-right {
     gap: 1.5rem;
   }
-  
+
   .main-nav {
     gap: 1rem;
     margin-right: 1rem;
   }
-  
+
   .nav-link {
     font-size: 1rem;
     padding: 0.4rem 0.6rem;
   }
-  
+
   .user-info {
     padding: 0.5rem 1rem;
   }
@@ -323,41 +323,41 @@ const logout = () => {
     height: auto;
     padding: 1rem;
   }
-  
+
   .header-left {
     justify-content: center;
     text-align: center;
   }
-  
+
   .logo-container {
     width: 200px;
     height: 80px;
   }
-  
+
   .header-right {
     flex-direction: column;
     gap: 1rem;
     align-items: center;
   }
-  
+
   .main-nav {
     margin-right: 0;
     gap: 1.5rem;
   }
-  
+
   .nav-link {
     font-size: 1rem;
     padding: 0.4rem 0.6rem;
   }
-  
+
   .user-info {
     padding: 0.5rem 1rem;
   }
-  
+
   .app-main {
     padding: 1.5rem 1rem;
   }
-  
+
   .app-main.login-page {
     padding: 0;
   }
@@ -367,21 +367,21 @@ const logout = () => {
   .app-header {
     padding: 0.8rem;
   }
-  
+
   .logo-container {
     width: 180px;
     height: 70px;
   }
-  
+
   .main-nav {
     flex-direction: column;
     gap: 0.8rem;
   }
-  
+
   .nav-link {
     font-size: 0.95rem;
   }
-  
+
   .user-info {
     flex-direction: column;
     gap: 0.8rem;

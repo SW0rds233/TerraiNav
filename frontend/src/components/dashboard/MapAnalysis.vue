@@ -143,7 +143,7 @@
           <div class="analysis-progress" v-if="analysisProgress.status !== 'idle'">
             <div class="progress-text">{{ analysisProgress.message }}</div>
             <div class="progress-bar">
-              <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+              <div class="progress-fill" :style="{ width: analysisProgress.progress_percent + '%' }"></div>
             </div>
           </div>
           <div class="analysis-tip">
@@ -572,10 +572,66 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import axios from 'axios'
 import { useUserStore } from '../../stores/userStore'
+
+// 类型定义
+interface AnalysisProgress {
+  status: 'idle' | 'pending' | 'running' | 'completed' | 'failed'
+  message: string
+  progress_percent: number
+}
+
+interface AnalysisResult {
+  heatmap: string
+  path: string
+  stats: {
+    pathLength: string
+    maxThreat: string
+    avgThreat: string
+    time: string
+  } | null
+  threatPoints: ThreatPoint[]
+  threatStats: {
+    topThreatBlock: string
+    distribution: string
+    priorityPatrol: string
+  } | null
+  _rawData?: any
+}
+
+interface ThreatPoint {
+  id: number
+  rank: number
+  block: string
+  threatScore: number
+  coordinate: string
+  location: string
+  description: string
+  reason: string
+}
+
+interface GridBlock {
+  row: number
+  col: number
+  id: string
+  width: number
+  height: number
+  left: number
+  top: number
+  selected: boolean
+}
+
+interface RecentTask {
+  id: number
+  name: string
+  time: string
+  status: 'success' | 'failed' | 'pending'
+  statusText: string
+  thumbnail: string
+}
 
 const userStore = useUserStore()
 
@@ -632,17 +688,13 @@ apiClient.interceptors.response.use(
 // ==================== API 方法 ====================
 
 // 初始化API
-const initApi = async (apiKey) => {
-  try {
-    const response = await apiClient.post('/api/init', { api_key: apiKey })
-    return response.data
-  } catch (error) {
-    throw error
-  }
+const initApi = async (apiKey: string) => {
+  const response = await apiClient.post('/api/init', { api_key: apiKey })
+  return response.data
 }
 
 // 获取威胁数据（包含热力图和路径图）
-const waitForTaskResult = async (taskId, interval = 2000, timeoutMs = 300000) => {
+const waitForTaskResult = async (taskId: string, interval: number = 2000, timeoutMs: number = 300000) => {
   const startTime = Date.now()
   while (true) {
     const response = await apiClient.get(`/api/task_status/${taskId}`)
@@ -674,7 +726,7 @@ const waitForTaskResult = async (taskId, interval = 2000, timeoutMs = 300000) =>
   }
 }
 
-const fetchThreatData = async (divide, imageFile) => {
+const fetchThreatData = async (divide: string, imageFile: File) => {
   const formData = new FormData()
   formData.append('divide', divide)
   formData.append('map_picture', imageFile)
@@ -690,22 +742,6 @@ const fetchThreatData = async (divide, imageFile) => {
   return await waitForTaskResult(data.task_id)
 }
 
-// 获取热力图URL
-const fetchHeatmap = async (divide, imageFile) => {
-  const formData = new FormData()
-  formData.append('divide', divide)
-  formData.append('map_picture', imageFile)
-
-  const response = await apiClient.post('/api/get_heatmap', formData)
-  return response.data
-}
-
-// 获取路径图URL
-const fetchPathmap = async (threatMatrix) => {
-  const response = await apiClient.post('/api/get_pathmap', { threat_matrix: threatMatrix })
-  return response.data
-}
-
 // ==================== 响应式数据 ====================
 const selectedImage = ref('')
 const selectedFileName = ref('')
@@ -713,32 +749,32 @@ const selectedFileSize = ref('')
 const apiKey = ref('')
 const analyzing = ref(false)
 const overlayOpacity = ref(50) // 叠加透明度，默认50%
-const analysisResult = ref({
+const analysisResult = ref<AnalysisResult>({
   heatmap: '',
   path: '',
   stats: null,
   threatPoints: [],
   threatStats: null,
 })
-const analysisProgress = ref({
+const analysisProgress = ref<AnalysisProgress>({
   status: 'idle',
   message: '准备分析',
   progress_percent: 0,
 })
 const activeTab = ref('original')
-const fileInput = ref(null)
+const fileInput = ref<HTMLInputElement | null>(null)
 const showGrid = ref(true)
-const selectedBlockIndex = ref(null)
-const highlightedBlockIndex = ref(null)
+const selectedBlockIndex = ref<number | null>(null)
+const highlightedBlockIndex = ref<number | null>(null)
 const imageNaturalSize = ref({ width: 0, height: 0 })
 const imageDisplayArea = ref({ width: 0, height: 0, left: 0, top: 0 })
 const mousePosition = ref({ x: -1, y: -1 })
-const imageContainer = ref(null)
-const heatmapImageContainer = ref(null)
-const pathImageContainer = ref(null)
-const resultImage = ref(null)
-const heatmapBaseImage = ref(null)
-const pathBaseImage = ref(null)
+const imageContainer = ref<HTMLDivElement | null>(null)
+const heatmapImageContainer = ref<HTMLDivElement | null>(null)
+const pathImageContainer = ref<HTMLDivElement | null>(null)
+const resultImage = ref<HTMLImageElement | null>(null)
+const heatmapBaseImage = ref<HTMLImageElement | null>(null)
+const pathBaseImage = ref<HTMLImageElement | null>(null)
 
 // 标签页配置
 const tabs = [
@@ -763,7 +799,7 @@ const droneParams = ref({
 })
 
 // 最近任务列表
-const recentTasks = ref([])
+const recentTasks = ref<RecentTask[]>([])
 
 // 计算属性
 const canAnalyze = computed(() => {
@@ -779,16 +815,6 @@ const analysisTip = computed(() => {
   return '点击"开始智能分析"按钮进行分析'
 })
 
-const analysisProgressPercent = computed(() => {
-  if (analysisProgress.value.progress_percent != null) {
-    return analysisProgress.value.progress_percent
-  }
-  if (analysisProgress.value.status === 'completed') return 100
-  if (analysisProgress.value.status === 'failed') return 100
-  if (analysisProgress.value.status === 'pending') return 5
-  return 0
-})
-
 // 解析巡逻区块输入
 const parsedGridBlocks = computed(() => {
   if (!droneParams.value.gridBlocks) return { m: 0, n: 0 }
@@ -798,32 +824,35 @@ const parsedGridBlocks = computed(() => {
     return { m: 0, n: 0 }
   }
 
-  return { m: parts[0], n: parts[1] }
+  return { m: parts[0] || 0, n: parts[1] || 0 }
 })
 
 // 验证巡逻区块格式
 const gridBlocksValid = computed(() => {
   const { m, n } = parsedGridBlocks.value
-  return m > 0 && n > 0
+  return (m ?? 0) > 0 && (n ?? 0) > 0
 })
 
 // 生成区块数据
-const gridBlocks = computed(() => {
+const gridBlocks = computed<GridBlock[]>(() => {
   const { m, n } = parsedGridBlocks.value
-  const blocks = []
+  const blocks: GridBlock[] = []
 
-  if (m <= 0 || n <= 0) return blocks
+  const rows = n ?? 0
+  const cols = m ?? 0
 
-  for (let row = 0; row <= n - 1; row++) {
-    for (let col = 0; col <= m - 1; col++) {
+  if (rows <= 0 || cols <= 0) return blocks
+
+  for (let row = 0; row <= rows - 1; row++) {
+    for (let col = 0; col <= cols - 1; col++) {
       blocks.push({
         row,
         col,
         id: `${row}-${col}`,
-        width: 100 / m,
-        height: 100 / n,
-        left: (col * 100) / m,
-        top: ((n - row - 1) * 100) / n,
+        width: 100 / cols,
+        height: 100 / rows,
+        left: (col * 100) / cols,
+        top: ((rows - row - 1) * 100) / rows,
         selected: false,
       })
     }
@@ -833,9 +862,9 @@ const gridBlocks = computed(() => {
 })
 
 // 当前选中的区块
-const selectedBlock = computed(() => {
-  if (selectedBlockIndex.value === null) return '未选择'
-  return gridBlocks.value[selectedBlockIndex.value]
+const selectedBlock = computed<GridBlock | null>(() => {
+  if (selectedBlockIndex.value === null) return null
+  return gridBlocks.value[selectedBlockIndex.value] || null
 })
 
 // 网格叠加层样式 - 精确覆盖图片区域
@@ -851,7 +880,7 @@ const gridOverlayStyle = computed(() => {
 })
 
 // 根据威胁度分数返回颜色类
-const getThreatColorClass = (score) => {
+const getThreatColorClass = (score: number) => {
   if (score >= 75) return 'score-red'
   if (score >= 60 && score < 75) return 'score-yellow'
   if (score >= 40 && score < 60) return 'score-green'
@@ -859,7 +888,7 @@ const getThreatColorClass = (score) => {
 }
 
 // 根据威胁度分数返回行类
-const getRowClass = (score) => {
+const getRowClass = (score: number) => {
   if (score >= 75) return 'high-threat-row'
   if (score >= 60 && score < 75) return 'medium-threat-row'
   if (score >= 40 && score < 60) return 'low-threat-row'
@@ -867,7 +896,7 @@ const getRowClass = (score) => {
 }
 
 // 获取区块颜色
-const getBlockColor = (block) => {
+const getBlockColor = (block: GridBlock) => {
   if (
     selectedBlockIndex.value !== null &&
     gridBlocks.value[selectedBlockIndex.value]?.id === block.id
@@ -899,33 +928,40 @@ const filteredThreatPoints = computed(() => {
 
 // 方法
 const triggerFileInput = () => {
-  fileInput.value.click()
+  if (fileInput.value) {
+    fileInput.value.click()
+  }
 }
 
-const handleFileSelect = (event) => {
-  const file = event.target.files[0]
+const handleFileSelect = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
   if (file && file.type.startsWith('image/')) {
     selectedFileName.value = file.name
     selectedFileSize.value = `${(file.size / 1024 / 1024).toFixed(2)} MB`
 
     const reader = new FileReader()
     reader.onload = (e) => {
-      selectedImage.value = e.target.result
+      if (e.target?.result) {
+        selectedImage.value = e.target.result as string
+      }
     }
     reader.readAsDataURL(file)
   }
 }
 
-const handleDrop = (event) => {
+const handleDrop = (event: DragEvent) => {
   event.preventDefault()
-  const file = event.dataTransfer.files[0]
+  const file = event.dataTransfer?.files?.[0]
   if (file && file.type.startsWith('image/')) {
     selectedFileName.value = file.name
     selectedFileSize.value = `${(file.size / 1024 / 1024).toFixed(2)} MB`
 
     const reader = new FileReader()
     reader.onload = (e) => {
-      selectedImage.value = e.target.result
+      if (e.target?.result) {
+        selectedImage.value = e.target.result as string
+      }
     }
     reader.readAsDataURL(file)
   }
@@ -957,12 +993,11 @@ const calculateImageDisplayArea = () => {
   if (!img || !container) return
 
   // 获取图片和容器的实际尺寸
-  const imgRect = img.getBoundingClientRect()
   const containerRect = container.getBoundingClientRect()
 
   // 获取图片的自然尺寸
-  const imgNaturalWidth = img.naturalWidth
-  const imgNaturalHeight = img.naturalHeight
+  const imgNaturalWidth = img.naturalWidth || 1
+  const imgNaturalHeight = img.naturalHeight || 1
 
   // 计算图片缩放比例（保持宽高比）
   const widthRatio = containerRect.width / imgNaturalWidth
@@ -1008,30 +1043,12 @@ watch(activeTab, () => {
   nextTick(() => {
     setTimeout(() => {
       calculateImageDisplayArea()
-    }, 200)
-  })
-})
-
-// 标签页切换时重新计算显示区域
-watch(activeTab, () => {
-  nextTick(() => {
-    setTimeout(() => {
-      calculateImageDisplayArea()
-    }, 50)
-  })
-})
-
-// 标签页切换时重新计算显示区域
-watch(activeTab, () => {
-  nextTick(() => {
-    setTimeout(() => {
-      calculateImageDisplayArea()
     }, 50)
   })
 })
 
 // 鼠标移动事件处理
-const handleMouseMove = (event) => {
+const handleMouseMove = (event: MouseEvent) => {
   if (!selectedImage.value || !imageDisplayArea.value.width) {
     mousePosition.value = { x: -1, y: -1 }
     return
@@ -1098,20 +1115,21 @@ const testApiKey = async () => {
       localStorage.removeItem('terrainav_api_key')
     }
   } catch (error) {
-    alert('API密钥验证失败: ' + error.message)
+    const errorMessage = error instanceof Error ? error.message : '未知错误'
+    alert('API密钥验证失败: ' + errorMessage)
     localStorage.removeItem('terrainav_api_key')
   }
 }
 
 // 选择区块
-const selectBlock = (block) => {
+const selectBlock = (block: GridBlock) => {
   const index = gridBlocks.value.findIndex((b) => b.id === block.id)
   selectedBlockIndex.value = index
   console.log(`选中区块: 行 ${block.row}, 列 ${block.col}`)
 }
 
 // 高亮区块
-const highlightBlock = (blockId) => {
+const highlightBlock = (blockId: string | null) => {
   if (!blockId) {
     highlightedBlockIndex.value = null
     return
@@ -1178,7 +1196,7 @@ const startAnalysis = async () => {
     if (threatMatrix && threatMatrix.length > 0) {
       for (const row of threatMatrix) {
         for (const val of row) {
-          if (val > 0) {
+          if (val && val > 0) {
             maxThreat = Math.max(maxThreat, val)
             totalThreat += val
             count++
@@ -1192,7 +1210,7 @@ const startAnalysis = async () => {
     const patrolPoints = result.patrol_points || []
 
     // 格式化威胁点数据用于显示
-    const formattedThreatPoints = patrolPoints.map((pt, idx) => ({
+    const formattedThreatPoints: ThreatPoint[] = patrolPoints.map((pt: any, idx: number) => ({
       id: idx + 1,
       rank: pt.rank || idx + 1,
       block: pt.block || '',
@@ -1210,12 +1228,12 @@ const startAnalysis = async () => {
       priorityPatrol:
         patrolPoints
           .slice(0, 4)
-          .map((p) => p.block)
+          .map((p: any) => p.block)
           .join('、') || '-',
     }
 
     // 获取图片URL (需要拼接完整URL)
-    const getImageUrl = (relativePath) => {
+    const getImageUrl = (relativePath: string) => {
       if (!relativePath) return ''
       if (relativePath.startsWith('http')) return relativePath
       return `${API_BASE_URL}${relativePath}`
@@ -1269,7 +1287,7 @@ const startAnalysis = async () => {
     }
 
     // 添加到最近任务（本地显示）
-    const newTask = {
+    const newTask: RecentTask = {
       id: Date.now(),
       name:
         taskName.value && taskName.value.trim()
@@ -1293,15 +1311,16 @@ const startAnalysis = async () => {
     alert(`分析完成！用时 ${timeSeconds} 秒`)
   } catch (error) {
     console.error('分析失败:', error)
+    const errorMessage = error instanceof Error ? error.message : '分析失败，请检查后端日志'
     analysisProgress.value = {
       status: 'failed',
-      message: error.message || '分析失败，请检查后端日志',
+      message: errorMessage,
       progress_percent: 100,
     }
-    alert('分析失败: ' + error.message)
+    alert('分析失败: ' + errorMessage)
 
     // 添加失败任务
-    const failedTask = {
+    const failedTask: RecentTask = {
       id: Date.now(),
       name: selectedFileName.value.replace(/\.[^/.]+$/, '') + '分析',
       time: '刚刚',
@@ -1315,24 +1334,16 @@ const startAnalysis = async () => {
   }
 }
 
-const zoomIn = () => {
-  alert('放大图片')
-}
-
-const zoomOut = () => {
-  alert('缩小图片')
-}
-
 // 显示路径详情
 const showPathDetails = () => {
   const rawData = analysisResult.value._rawData
   if (rawData && rawData.path_coords) {
-    const pathCoords = rawData.path_coords
+    const pathCoords = rawData.path_coords as number[][]
     let message = `路径坐标点 (共 ${pathCoords.length} 个):\n\n`
-    pathCoords.forEach((coord, idx) => {
+    pathCoords.forEach((coord: number[], idx: number) => {
       message += `${idx + 1}. (${coord[0]}, ${coord[1]})\n`
     })
-    if (rawData.best_path_length) {
+    if (rawData.best_path_length !== undefined && rawData.best_path_length !== null) {
       message += `\n总路径长度: ${rawData.best_path_length.toFixed(2)}`
     }
     alert(message)
@@ -1342,7 +1353,7 @@ const showPathDetails = () => {
 }
 
 // 下载图片
-const downloadImage = async (type) => {
+const downloadImage = async (type: 'heatmap' | 'path') => {
   const url = type === 'heatmap' ? analysisResult.value.heatmap : analysisResult.value.path
 
   if (!url) {
@@ -1352,7 +1363,7 @@ const downloadImage = async (type) => {
 
   try {
     // 显示下载提示
-    const loadingAlert = alert(`正在下载${type === 'heatmap' ? '热力图' : '路径图'}...`)
+    alert(`正在下载${type === 'heatmap' ? '热力图' : '路径图'}...`)
 
     // 创建下载链接
     const link = document.createElement('a')
@@ -1366,7 +1377,8 @@ const downloadImage = async (type) => {
     alert(`下载${type === 'heatmap' ? '热力图' : '路径图'}成功！`)
   } catch (error) {
     console.error('下载失败:', error)
-    alert('下载失败: ' + error.message)
+    const errorMessage = error instanceof Error ? error.message : '未知错误'
+    alert('下载失败: ' + errorMessage)
   }
 }
 

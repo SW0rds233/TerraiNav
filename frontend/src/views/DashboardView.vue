@@ -6,10 +6,10 @@
         <span class="app-name">TerraiNav</span>
         <span class="app-subtitle">地图适应无人机巡逻系统</span>
       </div>
-      
+
       <nav class="sidebar-nav">
-        <router-link 
-          to="/dashboard/map-analysis" 
+        <router-link
+          to="/dashboard/map-analysis"
           class="nav-item"
           :class="{ active: $route.name === 'map-analysis' }"
         >
@@ -18,9 +18,9 @@
           </svg>
           <span>地图分析</span>
         </router-link>
-        
-        <router-link 
-          to="/dashboard/history" 
+
+        <router-link
+          to="/dashboard/history"
           class="nav-item"
           :class="{ active: $route.name === 'history' }"
         >
@@ -29,9 +29,9 @@
           </svg>
           <span>历史记录</span>
         </router-link>
-        
-        <router-link 
-          to="/dashboard/settings" 
+
+        <router-link
+          to="/dashboard/settings"
           class="nav-item"
           :class="{ active: $route.name === 'settings' }"
         >
@@ -40,9 +40,9 @@
           </svg>
           <span>系统设置</span>
         </router-link>
-        
-        <router-link 
-          to="/dashboard/tutorial" 
+
+        <router-link
+          to="/dashboard/tutorial"
           class="nav-item"
           :class="{ active: $route.name === 'tutorial' }"
         >
@@ -52,21 +52,21 @@
           <span>使用教程</span>
         </router-link>
       </nav>
-      
+
       <div class="sidebar-footer">
         <div class="user-info">
           <span class="username">{{ userStore.user.name }}</span>
         </div>
       </div>
     </aside>
-    
+
     <!-- 主要内容区域 -->
     <main class="dashboard-main">
       <div class="main-header">
         <h1>{{ currentTitle }}</h1>
         <!-- 已删除"帮助"和"退出"按钮 -->
       </div>
-      
+
       <div class="main-content">
         <router-view />
       </div>
@@ -74,7 +74,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/userStore'
@@ -133,9 +133,9 @@ const currentTitle = computed(() => {
 .app-subtitle {
   font-size: 0.9rem;
   color: #6b7280;
-  display: block; 
-  line-height: 1.4; 
-  font-weight: 400; 
+  display: block;
+  line-height: 1.4;
+  font-weight: 400;
 }
 
 .sidebar-nav {
@@ -276,7 +276,7 @@ const currentTitle = computed(() => {
   .dashboard-layout {
     flex-direction: column;
   }
-  
+
   .dashboard-sidebar {
     width: 100%;
     flex-direction: row;
@@ -284,37 +284,37 @@ const currentTitle = computed(() => {
     border-right: none;
     border-bottom: 1px solid #e5e7eb;
   }
-  
+
   .sidebar-logo {
     padding: 0.5rem;
     border-bottom: none;
     margin-bottom: 0;
     text-align: left; /* 左对齐 */
   }
-  
+
   .app-name {
     font-size: 1.2rem;
   }
-  
+
   .app-subtitle {
     display: none; /* 在小屏幕上隐藏副标题 */
   }
-  
+
   .sidebar-nav {
     flex-direction: row;
     flex: 1;
     justify-content: center;
     gap: 0.5rem;
   }
-  
+
   .nav-item {
     padding: 0.5rem;
   }
-  
+
   .nav-item span {
     display: none;
   }
-  
+
   .sidebar-footer {
     display: none;
   }

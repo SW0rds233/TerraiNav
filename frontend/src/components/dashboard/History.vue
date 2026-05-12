@@ -39,15 +39,26 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useUserStore } from '../../stores/userStore'
 import axios from 'axios'
 
+interface HistoryTask {
+  id: number
+  name: string
+  time: string
+  description: string
+  image: string
+  status: string
+  outputRouteUrl: string
+  routeData: string
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
 const userStore = useUserStore()
 
-const historyTasks = ref([])
+const historyTasks = ref<HistoryTask[]>([])
 const loading = ref(false)
 const error = ref('')
 
@@ -73,7 +84,7 @@ const loadHistories = async () => {
     })
 
     if (response.data.success) {
-      historyTasks.value = response.data.histories.map(h => ({
+      historyTasks.value = response.data.histories.map((h: any) => ({
         id: h.id,
         name: h.task_name,
         time: h.created_at ? new Date(h.created_at).toLocaleString('zh-CN', {
@@ -100,11 +111,11 @@ const loadHistories = async () => {
   }
 }
 
-const viewDetails = (task) => {
+const viewDetails = (task: HistoryTask) => {
   alert(`查看任务详情: ${task.name}\n\n巡逻路线数据: ${task.routeData || '无'}`)
 }
 
-const downloadReport = (task) => {
+const downloadReport = (task: HistoryTask) => {
   if (task.outputRouteUrl) {
     window.open(task.outputRouteUrl, '_blank')
   } else {
