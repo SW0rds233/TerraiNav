@@ -23,25 +23,42 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     logger.warning("DATABASE_URL 环境变量未设置，使用SQLite作为备用")
     DATABASE_URL = "sqlite:///terrainav.db"
+else:
+    # 隐藏密码信息，只显示主机和端口
+    if '@' in DATABASE_URL:
+        parts = DATABASE_URL.split('@')
+        host_part = parts[1] if len(parts) > 1 else parts[0]
+        logger.info(f"使用数据库: {host_part}")
+    else:
+        logger.info(f"使用数据库: {DATABASE_URL}")
 
 # 处理MySQL连接URL（如果使用mysql://，替换为mysql+pymysql://）
 if DATABASE_URL.startswith("mysql://"):
     DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://", 1)
+    logger.info("检测到MySQL数据库，使用pymysql驱动")
+
+# 处理PostgreSQL连接URL（如果使用postgres://，替换为postgresql://）
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    logger.info("检测到PostgreSQL数据库，使用postgresql驱动")
 
 # 创建数据库引擎
 from sqlalchemy.exc import OperationalError
 
 try:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
-    # 测试连接（短暂打开并关闭）
+    # 测试连接
     try:
-        conn = engine.connect()
-        conn.close()
-    except Exception:
-        # 如果无法连接（例如在本地无法解析 internal Railway host），降级到 SQLite
+        with engine.connect() as conn:
+            conn.execute("SELECT 1")
+        logger.info("数据库连接测试成功")
+    except Exception as e:
+        logger.error(f"数据库连接测试失败: {e}")
+        # 如果无法连接，降级到 SQLite
         logger.warning("无法连接到远程数据库，降级使用本地SQLite数据库")
         DATABASE_URL = "sqlite:///terrainav.db"
         engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
+        logger.warning("已切换到SQLite数据库")
 
 except OperationalError as e:
     logger.error(f"创建数据库引擎失败: {e}")
