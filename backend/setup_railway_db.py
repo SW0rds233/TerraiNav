@@ -7,6 +7,7 @@ Railway MySQL 数据库配置助手
 import os
 import sys
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 def check_env_file():
     """检查 .env 文件是否存在"""
@@ -120,7 +121,7 @@ def test_connection():
         print("\n正在连接数据库...")
         try:
             with engine.connect() as conn:
-                result = conn.execute("SELECT 1")
+                result = conn.execute(text("SELECT 1"))
                 print("✓ 数据库连接成功")
                 print(f"  数据库类型: {engine.dialect.name}")
                 print(f"  数据库驱动: {engine.driver}")
@@ -128,7 +129,7 @@ def test_connection():
                 # 如果是 MySQL，显示更多信息
                 if engine.dialect.name == 'mysql':
                     try:
-                        version_result = conn.execute("SELECT VERSION()")
+                        version_result = conn.execute(text("SELECT VERSION()"))
                         version = version_result.fetchone()
                         if version:
                             print(f"  MySQL 版本: {version[0]}")
@@ -137,7 +138,7 @@ def test_connection():
                     
                     # 显示数据库列表
                     try:
-                        db_result = conn.execute("SHOW DATABASES")
+                        db_result = conn.execute(text("SHOW DATABASES"))
                         databases = [row[0] for row in db_result.fetchall()]
                         print(f"  可用数据库: {', '.join(databases)}")
                     except Exception as e:

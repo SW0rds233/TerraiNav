@@ -5,6 +5,7 @@ MySQL 认证问题快速诊断工具
 
 import sys
 import subprocess
+from sqlalchemy import text
 
 def check_cryptography():
     """检查 cryptography 包是否已安装"""
@@ -38,7 +39,7 @@ def check_mysql_auth():
             try:
                 with engine.connect() as conn:
                     # 检查MySQL版本
-                    version_result = conn.execute("SELECT VERSION()")
+                    version_result = conn.execute(text("SELECT VERSION()"))
                     version = version_result.fetchone()
                     if version:
                         print(f"  MySQL版本: {version[0]}")
@@ -51,7 +52,7 @@ def check_mysql_auth():
                             print("  ✓ MySQL 5.7 或更早版本")
                     
                     # 检查当前用户的认证方法
-                    user_result = conn.execute("SELECT user, host, plugin FROM mysql.user WHERE user='root'")
+                    user_result = conn.execute(text("SELECT user, host, plugin FROM mysql.user WHERE user='root'"))
                     users = user_result.fetchall()
                     
                     if users:
@@ -86,7 +87,7 @@ def test_connection():
         print("\n正在测试连接...")
         try:
             with engine.connect() as conn:
-                result = conn.execute("SELECT 1")
+                result = conn.execute(text("SELECT 1"))
                 print("✓ 数据库连接成功")
                 print(f"  数据库类型: {engine.dialect.name}")
                 print(f"  数据库驱动: {engine.driver}")

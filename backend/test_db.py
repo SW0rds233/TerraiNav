@@ -6,6 +6,7 @@
 import os
 import sys
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 # 加载环境变量
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -21,7 +22,7 @@ def test_database_connection():
     
     try:
         with engine.connect() as conn:
-            result = conn.execute("SELECT 1")
+            result = conn.execute(text("SELECT 1"))
             print(f"✓ 数据库连接成功")
             print(f"  数据库类型: {engine.dialect.name}")
             print(f"  数据库驱动: {engine.driver}")
@@ -30,7 +31,7 @@ def test_database_connection():
             # 如果是MySQL，显示MySQL版本
             if engine.dialect.name == 'mysql':
                 try:
-                    version_result = conn.execute("SELECT VERSION()")
+                    version_result = conn.execute(text("SELECT VERSION()"))
                     version = version_result.fetchone()
                     if version:
                         print(f"  MySQL版本: {version[0]}")

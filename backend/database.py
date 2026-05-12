@@ -2,7 +2,7 @@
 数据库连接和操作工具
 """
 
-from sqlalchemy import create_engine, and_, or_
+from sqlalchemy import create_engine, and_, or_, text
 from sqlalchemy.orm import sessionmaker, Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Optional, List, Dict, Any
@@ -66,7 +66,7 @@ def test_database_connection(engine):
     """测试数据库连接"""
     try:
         with engine.connect() as conn:
-            conn.execute("SELECT 1")
+            conn.execute(text("SELECT 1"))
         return True
     except Exception as e:
         logger.error(f"数据库连接测试失败: {e}")

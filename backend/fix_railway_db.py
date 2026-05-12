@@ -6,6 +6,7 @@ Railway 数据库连接问题快速诊断和修复工具
 import os
 import sys
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 def diagnose_railway_db_issue():
     """诊断Railway数据库连接问题"""
@@ -127,7 +128,7 @@ def test_current_connection():
         print("\n正在测试连接...")
         try:
             with engine.connect() as conn:
-                result = conn.execute("SELECT 1")
+                result = conn.execute(text("SELECT 1"))
                 print("✓ 数据库连接成功")
                 print(f"  数据库类型: {engine.dialect.name}")
                 print(f"  数据库驱动: {engine.driver}")
