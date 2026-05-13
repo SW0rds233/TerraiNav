@@ -279,7 +279,7 @@
                     <button class="action-btn" @click="downloadImage('heatmap')">下载</button>
                   </div>
                 </div>
-                <div class="image-container" ref="heatmapImageContainer">
+                <div class="image-container overlay-stack" ref="heatmapImageContainer">
                   <img
                     v-if="selectedImage"
                     :src="selectedImage"
@@ -344,7 +344,7 @@
                     <button class="action-btn" @click="showPathDetails">路径详情</button>
                   </div>
                 </div>
-                <div class="image-container" ref="pathImageContainer">
+                <div class="image-container overlay-stack" ref="pathImageContainer">
                   <img
                     v-if="selectedImage"
                     :src="selectedImage"
@@ -1272,9 +1272,9 @@ const startAnalysis = async () => {
             ? taskName.value.trim()
             : selectedFileName.value.replace(/\.[^/.]+$/, '') + '分析',
           description: `AI地形分析任务 - 识别到${patrolPoints.length}个巡逻点，路径长度${result.best_path_length?.toFixed(2) || 0}`,
-          input_image_url: selectedImage.value,
-          heatmap_url: getImageUrl(result.heatmap_url || ''),
-          route_url: getImageUrl(result.pathmap_url || ''),
+          input_image_url: selectedFileName.value,
+          heatmap_url: result.heatmap_url || '',
+          route_url: result.pathmap_url || '',
           report_url: '',
           task_status: 'completed',
           task_time: new Date().toISOString()
@@ -2152,13 +2152,16 @@ onUnmounted(() => {
   display: block;
 }
 
+/* Grid叠加容器：让原始图和热力图/路径图精确叠加 */
+.overlay-stack {
+  display: grid;
+}
+.overlay-stack > * {
+  grid-area: 1 / 1;
+}
+
 .overlay-image {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
   pointer-events: none;
-  opacity: 0.5;
   transition: opacity 0.3s ease;
 }
 
