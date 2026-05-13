@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, and_, or_, text
 from sqlalchemy.orm import sessionmaker, Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Optional, List, Dict, Any
+from datetime import datetime
 import os
 from dotenv import load_dotenv
 # Load environment variables from backend/.env (if present) so DATABASE_URL set in .env is available
@@ -23,9 +24,20 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # 支持备用数据库URL（当主数据库不可用时使用）
 DATABASE_URL_BACKUP = os.getenv("DATABASE_URL_BACKUP")
 
+# 如果 DATABASE_URL 未设置，尝试从 Railway 的独立 MYSQL 环境变量构建
 if not DATABASE_URL:
-    logger.warning("DATABASE_URL 环境变量未设置，使用SQLite作为备用")
-    DATABASE_URL = "sqlite:///terrainav.db"
+    mysql_host = os.getenv("MYSQLHOST")
+    mysql_port = os.getenv("MYSQLPORT", "3306")
+    mysql_user = os.getenv("MYSQLUSER", "root")
+    mysql_password = os.getenv("MYSQLPASSWORD", "")
+    mysql_database = os.getenv("MYSQLDATABASE", "railway")
+    
+    if mysql_host and mysql_password:
+        DATABASE_URL = f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}"
+        logger.info(f"从独立环境变量构建 MySQL DSN: {mysql_host}:{mysql_port}/{mysql_database}")
+    else:
+        logger.warning("DATABASE_URL 环境变量未设置，使用SQLite作为备用")
+        DATABASE_URL = "sqlite:///terrainav.db"
 else:
     # 隐藏密码信息，只显示主机和端口
     if '@' in DATABASE_URL:
@@ -258,9 +270,13 @@ class HistoryManager:
     def create_history(
         user_id: int,
         task_name: str,
-        input_image_url: str,
-        output_route_url: str,
-        route_data: str
+        description: str = "",
+        input_image_url: str = "",
+        heatmap_url: str = "",
+        route_url: str = "",
+        report_url: str = "",
+        task_status: str = "completed",
+        task_time: Optional[datetime] = None
     ) -> Optional[History]:
         """创建历史记录"""
         db = get_db()
@@ -268,9 +284,13 @@ class HistoryManager:
             new_history = History(
                 user_id=user_id,
                 task_name=task_name,
+                description=description,
                 input_image_url=input_image_url,
-                output_route_url=output_route_url,
-                route_data=route_data
+                heatmap_url=heatmap_url,
+                route_url=route_url,
+                report_url=report_url,
+                task_status=task_status,
+                task_time=task_time or datetime.utcnow()
             )
             
             db.add(new_history)
@@ -336,7 +356,7 @@ class HistoryManager:
             db.close()
 
     @staticmethod
-    def get_recent_histories(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_recent_histories(user_id: int, limit: int = 3) -> List[Dict[str, Any]]:
         """获取最近的历史记录（用于首页展示）"""
         db = get_db()
         try:
@@ -346,13 +366,25 @@ class HistoryManager:
             
             result = []
             for h in histories:
+                actual_status = h.task_status or "completed"
+                status_map = {
+                    "completed": ("success", "完成"),
+                    "processing": ("processing", "处理中"),
+                    "failed": ("failed", "失败"),
+                    "pending": ("pending", "待处理"),
+                }
+                status_key, status_text = status_map.get(actual_status, ("success", "完成"))
                 result.append({
                     "id": h.id,
                     "name": h.task_name,
                     "time": h.created_at.strftime("%Y-%m-%d %H:%M") if h.created_at else "",
                     "image": h.input_image_url or "/pictures/background1.jpg",
-                    "status": "completed",
-                    "thumbnail": h.input_image_url or "/pictures/background1.jpg"
+                    "status": status_key,
+                    "statusText": status_text,
+                    "thumbnail": h.input_image_url or "/pictures/background1.jpg",
+                    "description": h.description or "巡逻路线分析任务",
+                    "heatmap_url": h.heatmap_url,
+                    "route_url": h.route_url
                 })
             
             return result

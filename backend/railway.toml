@@ -1,0 +1,22 @@
+[build]
+  builder = "NIXPACKS"
+  buildCommand = "pip install -r requirements.txt"
+  watchPatterns = ["*.py", "*.txt"]
+
+[deploy]
+  startCommand = "gunicorn api:app --bind 0.0.0.0:${PORT:-8000} --workers 1 --timeout 300 --access-logfile - --log-file - --log-level info"
+  restartPolicyType = "ON_FAILURE"
+  numReplicas = 1
+
+[service]
+  port = 8000
+
+# 持久化卷：确保生成的图片在重启后仍可用
+[volumes.static_output]
+  mountPath = "/app/static/output"
+  sizeGB = 1
+
+[environment]
+  # DASHSCOPE_API_KEY 和 SECRET_KEY 请在 Railway 仪表板设置
+  # DATABASE_URL 由 Railway 自动注入
+  MAX_CONTENT_LENGTH = "52428800"

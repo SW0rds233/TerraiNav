@@ -35,6 +35,8 @@
             <span v-if="!registering">注册</span>
             <span v-else>注册中...</span>
           </button>
+          <div v-if="registerError" class="form-error">{{ registerError }}</div>
+          <div v-if="registerSuccess" class="form-success">{{ registerSuccess }}</div>
         </form>
       </div>
 
@@ -61,6 +63,7 @@
             <span v-if="!loggingIn">登录</span>
             <span v-else>登录中...</span>
           </button>
+          <div v-if="loginError" class="form-error">{{ loginError }}</div>
         </form>
       </div>
 
@@ -99,10 +102,13 @@ const userStore = useUserStore()
 
 const loginUsername = ref('')
 const loginPassword = ref('')
+const loginError = ref('')
 
 const registerUsername = ref('')
 const registerEmail = ref('')
 const registerPassword = ref('')
+const registerError = ref('')
+const registerSuccess = ref('')
 
 const showRegister = ref(false)
 
@@ -111,72 +117,71 @@ const registering = ref(false)
 
 const toggleToLogin = () => {
   showRegister.value = false
+  registerError.value = ''
+  registerSuccess.value = ''
 }
 
 const toggleToRegister = () => {
   showRegister.value = true
+  loginError.value = ''
 }
 
 const handleLogin = async () => {
-  console.log('登录信息:', {
-    username: loginUsername.value,
-    password: loginPassword.value
-  })
+  loginError.value = ''
 
-  if (loginUsername.value && loginPassword.value) {
-    loggingIn.value = true
+  if (!loginUsername.value || !loginPassword.value) {
+    loginError.value = '请输入用户名和密码'
+    return
+  }
 
-    try {
-      await userStore.login(loginUsername.value, loginPassword.value)
+  loggingIn.value = true
 
-      console.log('登录成功，跳转到仪表板')
-      router.push('/dashboard/map-analysis')
-
-    } catch (error) {
-      console.error('登录失败:', error)
-      const errMsg = (error as Error).message || '请检查用户名和密码'
-      alert('登录失败: ' + errMsg)
-    } finally {
-      loggingIn.value = false
-    }
-  } else {
-    alert('请输入用户名和密码')
+  try {
+    await userStore.login(loginUsername.value, loginPassword.value)
+    console.log('登录成功，跳转到仪表板')
+    router.push('/dashboard/map-analysis')
+  } catch (error) {
+    console.error('登录失败:', error)
+    loginError.value = (error as Error).message || '登录失败，请检查用户名和密码'
+  } finally {
+    loggingIn.value = false
   }
 }
 
 const handleRegister = async () => {
-  console.log('注册信息:', {
-    username: registerUsername.value,
-    email: registerEmail.value,
-    password: registerPassword.value
-  })
+  registerError.value = ''
+  registerSuccess.value = ''
 
-  if (registerUsername.value && registerEmail.value && registerPassword.value) {
-    registering.value = true
+  if (!registerUsername.value || !registerEmail.value || !registerPassword.value) {
+    registerError.value = '请填写完整的注册信息'
+    return
+  }
 
-    try {
-      await userStore.register(
-        registerUsername.value,
-        registerEmail.value,
-        registerPassword.value
-      )
+  registering.value = true
 
-      alert('注册成功，请登录')
+  try {
+    await userStore.register(
+      registerUsername.value,
+      registerEmail.value,
+      registerPassword.value
+    )
+
+    registerSuccess.value = '注册成功，请登录'
+    registerUsername.value = ''
+    registerEmail.value = ''
+    registerPassword.value = ''
+
+    // 延迟切换到登录面板
+    setTimeout(() => {
       showRegister.value = false
+      registerSuccess.value = ''
+    }, 1500)
 
-      registerUsername.value = ''
-      registerEmail.value = ''
-      registerPassword.value = ''
-
-    } catch (error) {
-      console.error('注册失败:', error)
-      const errMsg = (error as Error).message || '请稍后重试'
-      alert('注册失败: ' + errMsg)
-    } finally {
-      registering.value = false
-    }
-  } else {
-    alert('请填写完整的注册信息')
+  } catch (error) {
+    console.error('注册失败:', error)
+    registerError.value = (error as Error).message || '注册失败，请稍后重试'
+  } finally {
+    registering.value = false
   }
 }
 </script>
@@ -467,6 +472,31 @@ const handleRegister = async () => {
 
 .input::placeholder {
   color: #888;
+}
+
+/* 表单错误和成功提示 */
+.form-error {
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 0.6rem 0.9rem;
+  margin-top: 0.8rem;
+  font-size: 0.85rem;
+  width: 100%;
+  text-align: center;
+}
+
+.form-success {
+  color: #16a34a;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  padding: 0.6rem 0.9rem;
+  margin-top: 0.8rem;
+  font-size: 0.85rem;
+  width: 100%;
+  text-align: center;
 }
 
 /* 左下角版权信息 */

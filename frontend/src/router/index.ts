@@ -1,15 +1,4 @@
-import { createRouter, createWebHistory, type RouteLocationNormalized, type NavigationGuardNext } from 'vue-router'
-
-// 路由守卫
-const authGuard = (to: RouteLocationNormalized, from: RouteLocationNormalized, next: NavigationGuardNext) => {
-  const token = localStorage.getItem('terrainav_token')
-
-  if (!token) {
-    next('/login')
-  } else {
-    next()
-  }
-}
+import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   {
@@ -35,7 +24,6 @@ const routes = [
     path: '/dashboard',
     name: 'dashboard',
     component: () => import('../views/DashboardView.vue'),
-    beforeEnter: authGuard,
     children: [
       {
       path: '',

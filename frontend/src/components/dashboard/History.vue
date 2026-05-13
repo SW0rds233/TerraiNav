@@ -22,15 +22,51 @@
       <div v-else class="history-list">
         <div v-for="task in historyTasks" :key="task.id" class="history-item">
           <div class="history-preview">
-            <img :src="task.image" :alt="task.name" />
+            <img :src="getImageUrl(task.input_image_url)" :alt="task.task_name" @error="onImageError" />
           </div>
           <div class="history-info">
-            <h3>{{ task.name }}</h3>
-            <p class="history-time">{{ task.time }}</p>
-            <p class="history-desc">{{ task.description }}</p>
+            <h3>{{ task.task_name }}</h3>
+            <p class="history-time">{{ formatTime(task.created_at) }}</p>
+            <p class="history-desc">{{ task.description || '无描述' }}</p>
+
             <div class="history-actions">
-              <button class="btn" @click="viewDetails(task)">查看详情</button>
-              <button class="btn" @click="downloadReport(task)">下载报告</button>
+              <button class="btn" @click="toggleDetail(task)">
+                {{ expandedTaskId === task.id ? '收起详情' : '查看详情' }}
+              </button>
+              <button class="btn" @click="downloadReport(task)" :disabled="!task.route_url">
+                下载路线图
+              </button>
+              <button class="btn btn-danger" @click="deleteHistory(task)" :disabled="deleting === task.id">
+                {{ deleting === task.id ? '删除中...' : '删除' }}
+              </button>
+            </div>
+
+            <!-- 展开详情：热力图 + 路线图 -->
+            <div v-if="expandedTaskId === task.id" class="task-detail-expand">
+              <div class="detail-row">
+                <span>任务时间：</span>{{ formatTime(task.task_time) }}
+              </div>
+              <div class="detail-row">
+                <span>创建时间：</span>{{ formatTime(task.created_at) }}
+              </div>
+              <div class="detail-row">
+                <span>任务状态：</span>{{ task.task_status }}
+              </div>
+              <div class="detail-row">
+                <span>任务描述：</span>{{ task.description || '无描述' }}
+              </div>
+
+              <!-- 热力图 -->
+              <div class="img-group" v-if="task.heatmap_url">
+                <label>🔥 热力图</label>
+                <img :src="getImageUrl(task.heatmap_url)" class="result-img" @error="onImageError" />
+              </div>
+
+              <!-- 路线图 -->
+              <div class="img-group" v-if="task.route_url">
+                <label>🛣️ 巡逻路线图</label>
+                <img :src="getImageUrl(task.route_url)" class="result-img" @error="onImageError" />
+              </div>
             </div>
           </div>
         </div>
@@ -40,30 +76,36 @@
 </template>
 
 <script setup lang="ts">
-import { defineComponent, ref, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useUserStore } from '../../stores/userStore'
 import axios from 'axios'
 
-const __name__ = 'HistoryPage'
-
 interface HistoryTask {
   id: number
-  name: string
-  time: string
+  task_name: string
   description: string
-  image: string
-  status: string
-  outputRouteUrl: string
-  routeData: string
+  input_image_url: string
+  heatmap_url: string
+  route_url: string
+  report_url: string
+  task_status: string
+  task_time: string
+  created_at: string
+  updated_at: string
 }
 
 interface HistoryResponse {
   id: number
   task_name: string
-  created_at: string
+  description: string
   input_image_url: string
-  output_route_url: string
-  route_data: string
+  heatmap_url: string
+  route_url: string
+  report_url: string
+  task_status: string
+  task_time: string
+  created_at: string
+  updated_at: string
 }
 
 interface AxiosError {
@@ -80,10 +122,43 @@ const userStore = useUserStore()
 const historyTasks = ref<HistoryTask[]>([])
 const loading = ref(false)
 const error = ref('')
+const expandedTaskId = ref<number | null>(null)
+const deleting = ref<number | null>(null)
 
 onMounted(() => {
   loadHistories()
 })
+
+const getImageUrl = (url: string) => {
+  if (!url) return '/pictures/background1.jpg'
+
+  // 处理 /static/ 路径
+  if (url.startsWith('/static/')) {
+    return `${API_BASE_URL}${url}`
+  }
+
+  // 处理 /uploads/ 路径
+  if (url.startsWith('/uploads/')) {
+    return `${API_BASE_URL}${url}`
+  }
+
+  // 处理 Base64 数据
+  if (url.startsWith('data:')) {
+    return url
+  }
+
+  // 网络图片直接返回
+  if (url.startsWith('http')) return url
+
+  return url
+}
+
+const onImageError = (e: Event) => {
+  const img = e.target as HTMLImageElement
+  if (img) {
+    img.src = '/pictures/background1.jpg'
+  }
+}
 
 const loadHistories = async () => {
   if (!userStore.user.id || userStore.user.id <= 0) {
@@ -105,19 +180,16 @@ const loadHistories = async () => {
     if (response.data.success) {
       historyTasks.value = response.data.histories.map((h: HistoryResponse) => ({
         id: h.id,
-        name: h.task_name,
-        time: h.created_at ? new Date(h.created_at).toLocaleString('zh-CN', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit'
-        }) : '',
-        description: `输入图像: ${h.input_image_url || '无'}`,
-        image: h.input_image_url || '/pictures/background1.jpg',
-        status: 'completed',
-        outputRouteUrl: h.output_route_url,
-        routeData: h.route_data
+        task_name: h.task_name,
+        description: h.description || '',
+        input_image_url: h.input_image_url || '',
+        heatmap_url: h.heatmap_url || '',
+        route_url: h.route_url || '',
+        report_url: h.report_url || '',
+        task_status: h.task_status || 'completed',
+        task_time: h.task_time || '',
+        created_at: h.created_at || '',
+        updated_at: h.updated_at || ''
       }))
     } else {
       error.value = response.data.error || '加载失败'
@@ -131,15 +203,43 @@ const loadHistories = async () => {
   }
 }
 
-const viewDetails = (task: HistoryTask) => {
-  alert(`查看任务详情: ${task.name}\n\n巡逻路线数据: ${task.routeData || '无'}`)
+const toggleDetail = (task: HistoryTask) => {
+  expandedTaskId.value = expandedTaskId.value === task.id ? null : task.id
+}
+
+const formatTime = (time: string) => {
+  if (!time) return '未知时间'
+  return new Date(time).toLocaleString('zh-CN')
 }
 
 const downloadReport = (task: HistoryTask) => {
-  if (task.outputRouteUrl) {
-    window.open(task.outputRouteUrl, '_blank')
-  } else {
-    alert('该任务没有可下载的报告')
+  if (!task.route_url) {
+    alert('该任务没有可下载的路线图')
+    return
+  }
+  window.open(getImageUrl(task.route_url), '_blank')
+}
+
+const deleteHistory = async (task: HistoryTask) => {
+  if (!confirm(`确定要删除任务 "${task.task_name}" 吗？此操作不可恢复。`)) return
+
+  deleting.value = task.id
+  try {
+    const response = await axios.delete(`${API_BASE_URL}/api/history/${task.id}`)
+    if (response.data.success) {
+      historyTasks.value = historyTasks.value.filter((h) => h.id !== task.id)
+      if (expandedTaskId.value === task.id) {
+        expandedTaskId.value = null
+      }
+    } else {
+      alert('删除失败: ' + (response.data.error || '未知错误'))
+    }
+  } catch (err) {
+    console.error('删除历史记录失败:', err)
+    const axiosError = err as AxiosError
+    alert('删除失败: ' + (axiosError?.response?.data?.error || (err as Error).message || '未知错误'))
+  } finally {
+    deleting.value = null
   }
 }
 </script>
@@ -164,6 +264,24 @@ const downloadReport = (task: HistoryTask) => {
 .page-header p {
   color: #6b7280;
   font-size: 1rem;
+}
+
+.history-content {
+  min-height: 400px;
+}
+
+.loading-state, .error-state, .empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  font-size: 1rem;
+  color: #9ca3af;
+}
+
+.error-state {
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .history-list {
@@ -230,6 +348,49 @@ const downloadReport = (task: HistoryTask) => {
 .history-actions {
   display: flex;
   gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.task-detail-expand {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: #374151;
+}
+
+.detail-row {
+  display: flex;
+}
+
+.detail-row span {
+  min-width: 100px;
+  font-weight: 500;
+  color: #1a2980;
+}
+
+.img-group {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.img-group label {
+  font-weight: 600;
+  color: #1a2980;
+  font-size: 14px;
+}
+
+.result-img {
+  width: 100%;
+  max-width: 380px;
+  border-radius: 8px;
+  border: 1px solid #eee;
+  object-fit: cover;
 }
 
 .btn {
@@ -243,9 +404,23 @@ const downloadReport = (task: HistoryTask) => {
   transition: all 0.2s;
 }
 
-.btn:hover {
+.btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn:hover:not(:disabled) {
   opacity: 0.9;
   transform: translateY(-1px);
+}
+
+.btn-danger {
+  background: linear-gradient(90deg, #dc2626, #ef4444);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(90deg, #b91c1c, #dc2626);
 }
 
 @media (max-width: 768px) {

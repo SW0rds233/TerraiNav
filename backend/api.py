@@ -40,18 +40,20 @@ logging.basicConfig(
 )
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-# CORS配置（允许所有跨域、支持自定义请求头）
+# CORS配置 - 支持开发和生产环境
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
+CORS(
+    app,
+    resources={r"/api/*": {"origins": ALLOWED_ORIGINS.split(",") if ALLOWED_ORIGINS != "*" else "*"}},
+    supports_credentials=False,
+    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+    expose_headers=["Content-Type", "X-API-Key", "Authorization"],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+)
+
 app.config["CORS_HEADERS"] = "Content-Type, X-API-Key, Authorization"
 app.config["CORS_SUPPORTS_CREDENTIALS"] = False
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
-
-CORS(
-    app,
-    resources={r"/api/*": {"origins": "*"}},
-    supports_credentials=False,
-    allow_headers="*",
-    expose_headers="*",
-)
 
 # 初始化数据库
 try:
@@ -62,9 +64,12 @@ except Exception as e:
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    origin = request.headers.get("Origin", "")
+    allowed = ALLOWED_ORIGINS.split(",") if ALLOWED_ORIGINS != "*" else ["*"]
+    if "*" in allowed or origin in allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Credentials"] = "false"
     response.headers["Access-Control-Max-Age"] = "86400"
     return response
@@ -79,6 +84,7 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 OUTPUT_FOLDER = os.path.join(BASE_DIR, "static", "output")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "static"), exist_ok=True)
 
 # 上传文件最大大小 50MB
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
@@ -637,6 +643,11 @@ def task_status(task_id):
 
 
 # ========================== 健康检查 ==========================
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    """Railway 健康检查端点"""
+    return jsonify({"status": "ok", "service": "TerraiNav API"})
+
 @app.route("/")
 def index():
     """API说明页"""
@@ -861,21 +872,38 @@ def create_history():
         data = request.get_json()
         user_id = data.get("user_id")
         task_name = data.get("task_name", "").strip()
+        description = data.get("description", "")
         input_image_url = data.get("input_image_url", "")
-        output_route_url = data.get("output_route_url", "")
-        route_data = data.get("route_data", "")
+        heatmap_url = data.get("heatmap_url", "")
+        route_url = data.get("route_url", "")
+        report_url = data.get("report_url", "")
+        task_status = data.get("task_status", "completed")
+        task_time = data.get("task_time")
 
         # 验证输入
         if not user_id or not task_name:
             return jsonify({"success": False, "error": "用户ID和任务名称不能为空"}), 400
 
+        # 解析任务时间
+        from datetime import datetime
+        task_time_obj = None
+        if task_time:
+            try:
+                task_time_obj = datetime.fromisoformat(task_time.replace('Z', '+00:00'))
+            except:
+                task_time_obj = None
+
         # 创建历史记录
         history = HistoryManager.create_history(
             user_id=user_id,
             task_name=task_name,
+            description=description,
             input_image_url=input_image_url,
-            output_route_url=output_route_url,
-            route_data=route_data
+            heatmap_url=heatmap_url,
+            route_url=route_url,
+            report_url=report_url,
+            task_status=task_status,
+            task_time=task_time_obj
         )
 
         if history:

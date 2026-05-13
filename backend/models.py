@@ -40,10 +40,15 @@ class History(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     task_name = Column(String(200), nullable=False)
+    description = Column(Text)
     input_image_url = Column(Text)
-    output_route_url = Column(Text)
-    route_data = Column(Text)
+    heatmap_url = Column(Text)
+    route_url = Column(Text)
+    report_url = Column(Text)
+    task_status = Column(String(50), default="completed")
+    task_time = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # 关联用户
     user = relationship("User", back_populates="histories")
@@ -53,8 +58,13 @@ class History(Base):
             "id": self.id,
             "user_id": self.user_id,
             "task_name": self.task_name,
+            "description": self.description,
             "input_image_url": self.input_image_url,
-            "output_route_url": self.output_route_url,
-            "route_data": self.route_data,
-            "created_at": self.created_at.isoformat() if self.created_at else None
+            "heatmap_url": self.heatmap_url,
+            "route_url": self.route_url,
+            "report_url": self.report_url,
+            "task_status": self.task_status,
+            "task_time": self.task_time.isoformat() if self.task_time else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }

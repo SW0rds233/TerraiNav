@@ -1147,7 +1147,6 @@ const startAnalysis = async () => {
   const startTime = Date.now()
 
   try {
-      analyzing.value = true
       analysisProgress.value = {
         status: 'pending',
         message: '任务已提交，等待后端处理...',
@@ -1259,6 +1258,7 @@ const startAnalysis = async () => {
     localStorage.setItem('terrainav_api_key', apiKey.value)
 
     // 保存历史记录到数据库
+    let savedToBackend = false
     if (userStore.user.id && userStore.user.id > 0) {
       try {
         const historyData = {
@@ -1266,41 +1266,43 @@ const startAnalysis = async () => {
           task_name: taskName.value && taskName.value.trim()
             ? taskName.value.trim()
             : selectedFileName.value.replace(/\.[^/.]+$/, '') + '分析',
+          description: `AI地形分析任务 - 识别到${patrolPoints.length}个巡逻点，路径长度${result.best_path_length?.toFixed(2) || 0}`,
           input_image_url: selectedImage.value,
-          output_route_url: getImageUrl(result.pathmap_url || ''),
-          route_data: JSON.stringify({
-            patrol_points: patrolPoints,
-            path_coords: result.path_coords,
-            best_path_length: result.best_path_length
-          })
+          heatmap_url: getImageUrl(result.heatmap_url || ''),
+          route_url: getImageUrl(result.pathmap_url || ''),
+          report_url: '',
+          task_status: 'completed',
+          task_time: new Date().toISOString()
         }
 
         await axios.post(`${API_BASE_URL}/api/history`, historyData)
         console.log('历史记录保存成功')
+        savedToBackend = true
 
-        // 刷新最近任务列表
+        // 刷新最近任务列表（从数据库加载）
         await refreshTasks()
       } catch (historyError) {
         console.error('保存历史记录失败:', historyError)
-        // 不影响主流程，只记录错误
       }
     }
 
-    // 添加到最近任务（本地显示）
-    const newTask: RecentTask = {
-      id: Date.now(),
-      name:
-        taskName.value && taskName.value.trim()
-          ? taskName.value.trim()
-          : selectedFileName.value.replace(/\.[^/.]+$/, '') + '分析',
-      time: '刚刚',
-      status: 'success',
-      statusText: '完成',
-      thumbnail: selectedImage.value,
-    }
-    recentTasks.value.unshift(newTask)
-    if (recentTasks.value.length > 10) {
-      recentTasks.value = recentTasks.value.slice(0, 10)
+    // 仅在前端未保存到数据库时，才将任务添加到本地显示（避免重复）
+    if (!savedToBackend) {
+      const newTask: RecentTask = {
+        id: Date.now(),
+        name:
+          taskName.value && taskName.value.trim()
+            ? taskName.value.trim()
+            : selectedFileName.value.replace(/\.[^/.]+$/, '') + '分析',
+        time: '刚刚',
+        status: 'success',
+        statusText: '完成',
+        thumbnail: selectedImage.value,
+      }
+      recentTasks.value.unshift(newTask)
+      if (recentTasks.value.length > 10) {
+        recentTasks.value = recentTasks.value.slice(0, 10)
+      }
     }
 
     console.log('分析完成!', analysisResult.value)
@@ -1392,7 +1394,7 @@ const refreshTasks = async () => {
     const response = await axios.get(`${API_BASE_URL}/api/history/recent`, {
       params: {
         user_id: userStore.user.id,
-        limit: 5
+        limit: 3
       }
     })
 
