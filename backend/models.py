@@ -3,7 +3,8 @@
 包含 users 和 history 两个表
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -40,11 +41,11 @@ class History(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     task_name = Column(String(200), nullable=False)
-    description = Column(Text)
-    input_image_url = Column(Text)
-    heatmap_url = Column(Text)
-    route_url = Column(Text)
-    report_url = Column(Text)
+    description = Column(MEDIUMTEXT)
+    input_image_url = Column(MEDIUMTEXT)
+    heatmap_url = Column(MEDIUMTEXT)
+    route_url = Column(MEDIUMTEXT)
+    report_url = Column(MEDIUMTEXT)
     task_status = Column(String(50), default="completed")
     task_time = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
