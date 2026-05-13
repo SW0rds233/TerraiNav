@@ -642,7 +642,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000
 // 创建axios实例
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 300000, // 5分钟超时
+  timeout: 480000, // 8分钟超时
 })
 
 // 请求拦截器 - 添加API密钥到请求头
@@ -694,7 +694,7 @@ const initApi = async (apiKey: string) => {
 }
 
 // 获取威胁数据（包含热力图和路径图）
-const waitForTaskResult = async (taskId: string, interval: number = 2000, timeoutMs: number = 300000) => {
+const waitForTaskResult = async (taskId: string, interval: number = 2000, timeoutMs: number = 480000) => {
   const startTime = Date.now()
   while (true) {
     const response = await apiClient.get(`/api/task_status/${taskId}`)
@@ -1045,6 +1045,11 @@ watch(activeTab, () => {
       calculateImageDisplayArea()
     }, 50)
   })
+})
+
+// 网格显示变更时同步到用户偏好
+watch(showGrid, (val) => {
+  userStore.updatePreferences({ gridDisplay: val })
 })
 
 // 鼠标移动事件处理
@@ -1410,10 +1415,27 @@ const refreshTasks = async () => {
 }
 
 onMounted(() => {
+  // 加载API密钥
   const savedApiKey = localStorage.getItem('terrainav_api_key')
   if (savedApiKey) {
     apiKey.value = savedApiKey
   }
+
+  // 加载无人机默认参数（由系统设置页保存）
+  const savedDroneParams = localStorage.getItem('terrainav_drone_params')
+  if (savedDroneParams) {
+    try {
+      const params = JSON.parse(savedDroneParams)
+      if (params.gridBlocks) droneParams.value.gridBlocks = params.gridBlocks
+      if (params.startPoint) droneParams.value.startPoint = params.startPoint
+    } catch {
+      // 解析失败则使用默认值
+    }
+  }
+
+  // 加载偏好设置
+  showGrid.value = userStore.preferences.gridDisplay !== false
+  overlayOpacity.value = userStore.preferences.showHeatmapLegend !== false ? 50 : 0
 
   window.addEventListener('resize', handleResize)
 

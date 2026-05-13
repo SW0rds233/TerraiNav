@@ -939,6 +939,52 @@ def delete_history(history_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ========================== 用户统计 API ==========================
+@app.route("/api/user/stats", methods=["GET"])
+def get_user_stats():
+    """获取用户存储统计信息"""
+    try:
+        user_id = request.args.get("user_id", type=int)
+        if not user_id:
+            return jsonify({"success": False, "error": "用户ID不能为空"}), 400
+
+        from database import get_db
+        from models import History
+        db = get_db()
+
+        try:
+            # 历史记录数量
+            history_count = db.query(History).filter(
+                History.user_id == user_id
+            ).count()
+
+            # 最近任务时间
+            latest = db.query(History).filter(
+                History.user_id == user_id
+            ).order_by(History.created_at.desc()).first()
+
+            latest_time = latest.created_at.strftime("%Y-%m-%d") if latest and latest.created_at else "暂无"
+
+            # 估算存储占用 (历史记录数 × 平均每条 base64 图片约 500KB)
+            estimated_mb = round(history_count * 0.5, 2)
+
+            return jsonify({
+                "success": True,
+                "stats": {
+                    "history_count": history_count,
+                    "latest_time": latest_time,
+                    "estimated_mb": estimated_mb,
+                    "estimated_kb": int(estimated_mb * 1024)
+                }
+            })
+        finally:
+            db.close()
+
+    except Exception as e:
+        logging.error(f"获取用户统计失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     # 确保static/output目录存在
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)

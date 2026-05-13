@@ -111,7 +111,12 @@
 
           <div class="setting-item">
             <label>最后更新</label>
-            <div class="system-info">2026-04-14</div>
+            <div class="system-info">{{ latestTime }}</div>
+          </div>
+
+          <div class="setting-item">
+            <label>历史记录</label>
+            <div class="system-info">{{ historyCount }} 条任务</div>
           </div>
 
           <div class="setting-item">
@@ -120,9 +125,10 @@
               <div class="storage-bar">
                 <div class="storage-fill" :style="{ width: storageUsed + '%' }"></div>
               </div>
-              <span class="storage-text"
-                >{{ storageUsed }}% 已使用 ({{ usedSpace }} MB / {{ totalSpace }} MB)</span
+              <span class="storage-text" v-if="!statsLoading"
+                >约 {{ usedSpace }} MB / {{ totalSpace }} MB ({{ storageUsed }}%)</span
               >
+              <span class="storage-text" v-else>加载中...</span>
             </div>
           </div>
         </div>
@@ -141,7 +147,9 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useUserStore } from '../../stores/userStore'
+import axios from 'axios'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
 const userStore = useUserStore()
 
 // API设置
@@ -160,9 +168,12 @@ const defaultGrid = ref('4 * 4')
 const defaultStartPoint = ref('1,1')
 
 // 系统信息
-const storageUsed = ref(45)
-const usedSpace = ref(450)
-const totalSpace = ref(1000)
+const storageUsed = ref(0)
+const usedSpace = ref(0)
+const totalSpace = ref(500)
+const historyCount = ref(0)
+const latestTime = ref('--')
+const statsLoading = ref(false)
 
 // 应用主题
 const applyTheme = () => {
@@ -305,9 +316,34 @@ const clearData = () => {
   }
 }
 
+// 加载存储统计
+const loadStorageStats = async () => {
+  if (!userStore.user.id || userStore.user.id <= 0) return
+
+  statsLoading.value = true
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/user/stats`, {
+      params: { user_id: userStore.user.id }
+    })
+
+    if (response.data.success) {
+      const s = response.data.stats
+      historyCount.value = s.history_count || 0
+      latestTime.value = s.latest_time || '--'
+      usedSpace.value = Math.max(s.estimated_mb || 0, 1)
+      storageUsed.value = Math.min(Math.round((usedSpace.value / totalSpace.value) * 100), 100)
+    }
+  } catch (error) {
+    console.error('加载存储统计失败:', error)
+  } finally {
+    statsLoading.value = false
+  }
+}
+
 // 组件挂载时加载设置
 onMounted(() => {
   loadSettings()
+  loadStorageStats()
 })
 </script>
 
