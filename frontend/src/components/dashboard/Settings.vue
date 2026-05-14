@@ -106,7 +106,7 @@
           <h3>系统信息</h3>
           <div class="setting-item">
             <label>系统版本</label>
-            <div class="system-info">v1.0.0</div>
+            <div class="system-info">v1.2.0</div>
           </div>
 
           <div class="setting-item">
