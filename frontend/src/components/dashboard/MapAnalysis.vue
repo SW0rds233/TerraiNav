@@ -1271,8 +1271,8 @@ const startAnalysis = async () => {
           task_name: taskName.value && taskName.value.trim()
             ? taskName.value.trim()
             : selectedFileName.value.replace(/\.[^/.]+$/, '') + '分析',
-          description: `AI地形分析任务 - 识别到${patrolPoints.length}个巡逻点，路径长度${result.best_path_length?.toFixed(2) || 0}`,
-          input_image_url: selectedFileName.value,
+          description: result.path_description || '路径规划任务',
+          input_image_url: result.upload_url || '',
           heatmap_url: result.heatmap_url || '',
           route_url: result.pathmap_url || '',
           report_url: '',

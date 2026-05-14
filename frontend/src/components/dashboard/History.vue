@@ -33,7 +33,7 @@
               <button class="btn" @click="toggleDetail(task)">
                 {{ expandedTaskId === task.id ? '收起详情' : '查看详情' }}
               </button>
-              <button class="btn" @click="downloadReport(task)" :disabled="!task.route_url">
+              <button class="btn" @click="downloadReport(task)" :disabled="!task.route_url || !task.input_image_url">
                 下载路线图
               </button>
               <button class="btn btn-danger" @click="deleteHistory(task)" :disabled="deleting === task.id">
@@ -41,7 +41,7 @@
               </button>
             </div>
 
-            <!-- 展开详情：热力图 + 路线图 -->
+            <!-- 展开详情：原始地图 + 路径规划图叠加 -->
             <div v-if="expandedTaskId === task.id" class="task-detail-expand">
               <div class="detail-row">
                 <span>任务时间：</span>{{ formatTime(task.task_time) }}
@@ -53,19 +53,40 @@
                 <span>任务状态：</span>{{ task.task_status }}
               </div>
               <div class="detail-row">
-                <span>任务描述：</span>{{ task.description || '无描述' }}
+                <span>巡逻路线：</span>
+                <span class="path-desc">{{ task.description || '无数据' }}</span>
               </div>
 
-              <!-- 热力图 -->
-              <div class="img-group" v-if="task.heatmap_url">
-                <label>🔥 热力图</label>
-                <img :src="getImageUrl(task.heatmap_url)" class="result-img" @error="onImageError" />
+              <!-- 叠加图：原始地图 + 路线图透明叠放 -->
+              <div v-if="task.route_url && task.input_image_url" class="overlay-section">
+                <div class="overlay-controls">
+                  <label>路线图透明度：</label>
+                  <input
+                    type="range"
+                    v-model="overlayOpacity"
+                    min="0"
+                    max="100"
+                    step="1"
+                    class="opacity-slider"
+                  />
+                  <span>{{ overlayOpacity }}%</span>
+                </div>
+                <div class="overlay-container">
+                  <img
+                    :src="getImageUrl(task.input_image_url)"
+                    class="base-img"
+                    @error="onImageError"
+                  />
+                  <img
+                    :src="getImageUrl(task.route_url)"
+                    class="overlay-img"
+                    :style="{ opacity: overlayOpacity / 100 }"
+                    @error="onImageError"
+                  />
+                </div>
               </div>
-
-              <!-- 路线图 -->
-              <div class="img-group" v-if="task.route_url">
-                <label>🛣️ 巡逻路线图</label>
-                <img :src="getImageUrl(task.route_url)" class="result-img" @error="onImageError" />
+              <div v-else class="img-group">
+                <p class="no-overlay-hint">缺少原始地图或路线图，无法显示叠加效果</p>
               </div>
             </div>
           </div>
@@ -124,6 +145,7 @@ const loading = ref(false)
 const error = ref('')
 const expandedTaskId = ref<number | null>(null)
 const deleting = ref<number | null>(null)
+const overlayOpacity = ref(50)
 
 onMounted(() => {
   loadHistories()
@@ -132,22 +154,18 @@ onMounted(() => {
 const getImageUrl = (url: string) => {
   if (!url) return '/pictures/background1.jpg'
 
-  // 处理 /static/ 路径
   if (url.startsWith('/static/')) {
     return `${API_BASE_URL}${url}`
   }
 
-  // 处理 /uploads/ 路径
   if (url.startsWith('/uploads/')) {
     return `${API_BASE_URL}${url}`
   }
 
-  // 处理 Base64 数据
   if (url.startsWith('data:')) {
     return url
   }
 
-  // 网络图片直接返回
   if (url.startsWith('http')) return url
 
   return url
@@ -204,7 +222,12 @@ const loadHistories = async () => {
 }
 
 const toggleDetail = (task: HistoryTask) => {
-  expandedTaskId.value = expandedTaskId.value === task.id ? null : task.id
+  if (expandedTaskId.value === task.id) {
+    expandedTaskId.value = null
+  } else {
+    expandedTaskId.value = task.id
+    overlayOpacity.value = 50
+  }
 }
 
 const formatTime = (time: string) => {
@@ -213,8 +236,8 @@ const formatTime = (time: string) => {
 }
 
 const downloadReport = (task: HistoryTask) => {
-  if (!task.route_url) {
-    alert('该任务没有可下载的路线图')
+  if (!task.route_url || !task.input_image_url) {
+    alert('该任务缺少路线图或原始地图')
     return
   }
   window.open(getImageUrl(task.route_url), '_blank')
@@ -343,6 +366,8 @@ const deleteHistory = async (task: HistoryTask) => {
   line-height: 1.5;
   margin-bottom: 1rem;
   flex: 1;
+  font-family: 'Consolas', 'Courier New', monospace;
+  word-break: break-all;
 }
 
 .history-actions {
@@ -366,31 +391,71 @@ const deleteHistory = async (task: HistoryTask) => {
   display: flex;
 }
 
-.detail-row span {
+.detail-row span:first-child {
   min-width: 100px;
   font-weight: 500;
   color: #1a2980;
 }
 
+.path-desc {
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: #374151;
+  word-break: break-all;
+}
+
+/* 叠加图样式 */
+.overlay-section {
+  margin-top: 12px;
+}
+
+.overlay-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.opacity-slider {
+  width: 120px;
+  accent-color: #1a2980;
+}
+
+.overlay-container {
+  position: relative;
+  display: grid;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  max-width: 500px;
+}
+
+.overlay-container > * {
+  grid-area: 1 / 1;
+}
+
+.base-img,
+.overlay-img {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+}
+
+.overlay-img {
+  pointer-events: none;
+}
+
+.no-overlay-hint {
+  color: #9ca3af;
+  font-size: 0.85rem;
+}
+
 .img-group {
   margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.img-group label {
-  font-weight: 600;
-  color: #1a2980;
-  font-size: 14px;
-}
-
-.result-img {
-  width: 100%;
-  max-width: 380px;
-  border-radius: 8px;
-  border: 1px solid #eee;
-  object-fit: cover;
 }
 
 .btn {
@@ -431,6 +496,10 @@ const deleteHistory = async (task: HistoryTask) => {
   .history-preview {
     width: 100%;
     height: 200px;
+  }
+
+  .overlay-container {
+    max-width: 100%;
   }
 }
 </style>

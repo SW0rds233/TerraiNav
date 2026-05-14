@@ -12,6 +12,7 @@ TerraiNav Web API - 地形威胁评估与路径规划服务
 from flask import Flask, request, jsonify, send_from_directory, url_for
 from flask_cors import CORS
 import os
+import shutil
 import logging
 import uuid
 import json
@@ -324,9 +325,13 @@ def build_threat_result(task_id, filename, img_width, img_height, rows, cols, st
         "matrix_shape": [int(threat_matrix.shape[0]), int(threat_matrix.shape[1])],
         "image_size": [int(img_width), int(img_height)],
         "path_coords": [json_safe_point(pt) for pt in path_coords] if path_coords else None,
+        "path_description": " -> ".join(
+            f"[{int(p[0])},{int(p[1])}]" for p in path_coords
+        ) if path_coords else "",
         "best_path_length": float(best_path_length),
         "heatmap_url": heatmap_url,
         "pathmap_url": pathmap_url,
+        "upload_url": "/uploads/" + os.path.basename(filename),
     }
 
 
@@ -647,6 +652,11 @@ def task_status(task_id):
 def health_check():
     """Railway 健康检查端点"""
     return jsonify({"status": "ok", "service": "TerraiNav API"})
+
+@app.route("/uploads/<path:filename>")
+def serve_upload(filename):
+    """提供上传文件的访问"""
+    return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route("/")
 def index():
