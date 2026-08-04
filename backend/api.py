@@ -24,8 +24,11 @@ import matplotlib
 matplotlib.use('Agg')
 matplotlib.interactive(False)
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, timezone
+import time
 import secrets
+import math
+import urllib.request
 
 # 导入业务模块
 from agent import TerrainAnalyzer
@@ -91,8 +94,9 @@ os.makedirs(os.path.join(BASE_DIR, "static"), exist_ok=True)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
 # ========================== 业务组件 ==========================
-# 全局分析器（需要在前端初始化时设置）
-analyzer = None
+# 【优化】per-session 分析器存储，支持多用户并发使用不同 API Key
+_analyzers = {}
+_analyzers_lock = threading.Lock()
 assessor = TerrainAssessor()
 planner = PathPlanner()
 
@@ -100,8 +104,38 @@ planner = PathPlanner()
 TASKS = {}
 TASK_LOCK = threading.Lock()
 
+def _cleanup_expired_tasks():
+    while True:
+        time.sleep(300)
+        now = datetime.now(timezone.utc)
+        with TASK_LOCK:
+            expired = []
+            for tid, task in TASKS.items():
+                try:
+                    created = datetime.fromisoformat(task["created_at"].replace("Z", "+00:00"))
+                    if (now - created).total_seconds() > 3600 and task["status"] in ("completed", "failed"):
+                        expired.append(tid)
+                except (ValueError, KeyError):
+                    expired.append(tid)
+            for tid in expired:
+                del TASKS[tid]
+
+_cleanup_thread = threading.Thread(target=_cleanup_expired_tasks, daemon=True)
+_cleanup_thread.start()
+
 
 # ========================== 工具函数 ==========================
+def _get_analyzer():
+    """【优化】获取当前请求的 analyzer，支持多会话并发使用不同 API Key"""
+    session_token = request.headers.get("X-Session-Token", "")
+    if session_token and session_token in _analyzers:
+        return _analyzers[session_token]
+    with _analyzers_lock:
+        if len(_analyzers) == 1:
+            return next(iter(_analyzers.values()))
+    return None
+
+
 def parse_divide(divide_str):
     """解析分块字符串，如 '4*6' -> (4, 6)"""
     try:
@@ -118,7 +152,7 @@ def parse_divide(divide_str):
 
 
 def parse_start_point(start_point_str, rows, cols, default=(0, 0)):
-    """解析起始区块字段，如 '1,1' -> (1, 1)"""
+    """【优化】统一的起始区块解析函数，消除重复代码"""
     if not start_point_str:
         return default
 
@@ -135,6 +169,16 @@ def parse_start_point(start_point_str, rows, cols, default=(0, 0)):
         return (start_row, start_col)
     except Exception as e:
         raise ValueError(f"起始区块解析失败: {e}")
+
+
+def build_threat_df_lookup(df):
+    """【优化】构建 (矩阵Y, 矩阵X) → 行数据 的快速查找字典"""
+    lookup = {}
+    for _, row in df.iterrows():
+        key = (row.get("矩阵Y"), row.get("矩阵X"))
+        if key not in lookup:
+            lookup[key] = row
+    return lookup
 
 
 def json_safe_point(point):
@@ -184,12 +228,13 @@ def get_image_size(filepath):
 
 def create_task_record(task_type, payload):
     task_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
     record = {
         "task_id": task_id,
         "task_type": task_type,
         "status": "pending",
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
         "progress": "pending",
         "progress_percent": 0,
         "result": None,
@@ -207,13 +252,25 @@ def update_task_record(task_id, **fields):
         if not task:
             return
         task.update(fields)
-        task["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
     return task
 
 
 def get_task_record(task_id):
     with TASK_LOCK:
         return TASKS.get(task_id)
+
+
+def _run_terrain_analysis(analyzer_local, assessor_local, planner_local, image_path, rows, cols, progress_callback=None):
+    """【优化】共享的AI分析→威胁评估→关键点检测管道，消除get_heatmap与build_threat_result的重复代码"""
+    terrain_data = analyzer_local.analyze_terrain(
+        image_path=image_path, rows=rows, cols=cols, max_workers=2,
+        progress_callback=progress_callback,
+    )
+    df, unique_x, unique_y = assessor_local.assess_terrain(terrain_data)
+    threat_matrix = assessor_local.build_threat_matrix(df, unique_x, unique_y)
+    keypoints = planner_local.detect_keypoints(threat_matrix)
+    return terrain_data, df, unique_x, unique_y, threat_matrix, keypoints
 
 
 def build_threat_result(task_id, filename, img_width, img_height, rows, cols, start_point):
@@ -230,39 +287,28 @@ def build_threat_result(task_id, filename, img_width, img_height, rows, cols, st
     update_task_record(task_id, progress="AI地形分析中", progress_percent=5)
     logging.info("开始AI地形分析...")
 
+    AI_PHASE_WEIGHT = 60
+
     def inline_progress_callback(completed, total, message):
-        percent = int(round(completed / total * 60)) if total else 50
+        percent = int(round(completed / total * AI_PHASE_WEIGHT)) if total else 50
         update_task_record(
             task_id,
             status="running",
             progress=message,
-            progress_percent=min(percent, 60),
+            progress_percent=min(percent, AI_PHASE_WEIGHT),
         )
 
-    terrain_data = analyzer_local.analyze_terrain(
-        image_path=filename,
-        rows=rows,
-        cols=cols,
-        max_workers=2,
+    # 【优化】使用共享管道函数
+    _, df, _, _, threat_matrix, keypoints = _run_terrain_analysis(
+        analyzer_local, assessor_local, planner_local, filename, rows, cols,
         progress_callback=inline_progress_callback,
     )
 
-    logging.info(f"AI分析完成，识别到 {len(terrain_data)} 个地形要素")
-    update_task_record(task_id, progress="AI分析完成，开始威胁评估", progress_percent=65)
-
-    # 威胁评估
-    df, unique_x, unique_y = assessor_local.assess_terrain(terrain_data)
-    threat_matrix = assessor_local.build_threat_matrix(df, unique_x, unique_y)
-
-    logging.info(f"威胁矩阵构建完成: {threat_matrix.shape}")
-    update_task_record(task_id, progress="威胁矩阵构建完成，开始关键点检测", progress_percent=70)
-
-    # 检测关键点
-    keypoints = planner_local.detect_keypoints(threat_matrix)
+    logging.info(f"AI分析完成，识别到 {len(df)} 个地形要素")
+    df_lookup = build_threat_df_lookup(df)
 
     patrol_points = []
     for idx, (row, col) in enumerate(keypoints):
-        rank = idx + 1
         block_row = row
         block_col = col
         threat_score = float(threat_matrix[row, col])
@@ -272,14 +318,16 @@ def build_threat_result(task_id, filename, img_width, img_height, rows, cols, st
         pixel_y = int(block_row * block_height + block_height // 2)
         pixel_coords = [pixel_x, pixel_y]
         block_position = f"区块({int(block_row)}, {int(block_col)})"
+
+        # 【优化】O(1) 字典查找替代 O(n) 遍历
         threat_reason = ""
-        for _, r in df.iterrows():
-            if r.get("矩阵Y") == row and r.get("矩阵X") == col:
-                threat_reason = f"{r.get('类型', '未知')}, {r.get('坡度', '未知')}, {r.get('威胁等级', '未知')}, {r.get('备注', '')}"
-                break
+        matched = df_lookup.get((row, col))
+        if matched is not None:
+            threat_reason = f"{matched.get('类型', '未知')}, {matched.get('坡度', '未知')}, {matched.get('威胁等级', '未知')}, {matched.get('备注', '')}"
+
         patrol_points.append(
             {
-                "rank": rank,
+                "rank": idx + 1,
                 "block": f"({block_row}, {block_col})",
                 "threat_score": threat_score,
                 "pixel_coords": pixel_coords,
@@ -370,9 +418,7 @@ def process_threat_task(task_id):
 # ========================== API 1: 热力图 ==========================
 @app.route("/api/init", methods=["POST"])
 def init_api():
-    """初始化AI分析器"""
-    global analyzer
-
+    """初始化AI分析器 - 支持多会话"""
     try:
         data = request.get_json()
         api_key = data.get("api_key", "").strip()
@@ -380,14 +426,21 @@ def init_api():
         if not api_key:
             return jsonify({"success": False, "error": "API Key不能为空"}), 400
 
-        # 创建分析器（使用用户提供的API Key）
-        analyzer = TerrainAnalyzer.create_analyzer(
+        new_analyzer = TerrainAnalyzer.create_analyzer(
             api_key=api_key,
             model="qwen3.6-plus",
             max_workers=2,
         )
 
-        return jsonify({"success": True, "message": "API初始化成功"})
+        session_token = secrets.token_hex(16)
+        with _analyzers_lock:
+            _analyzers[session_token] = new_analyzer
+
+        return jsonify({
+            "success": True,
+            "message": "API初始化成功",
+            "session_token": session_token,
+        })
 
     except Exception as e:
         logging.error(f"API初始化失败: {e}")
@@ -401,10 +454,7 @@ def get_heatmap():
     输入: divide (分块字符串如 "4*6"), map_picture (地图图片文件)
     输出: heatmap_url (热力图图片URL)
     """
-    global analyzer
-
     try:
-        # 1. 获取参数
         divide = request.form.get("divide", "").strip()
         map_file = request.files.get("map_picture")
 
@@ -412,40 +462,28 @@ def get_heatmap():
             return jsonify({"success": False, "error": "分块参数不能为空"}), 400
         if not map_file:
             return jsonify({"success": False, "error": "地图图片不能为空"}), 400
-        if analyzer is None:
+
+        analyzer_local = _get_analyzer()
+        if analyzer_local is None:
             return jsonify(
                 {"success": False, "error": "请先调用 /api/init 初始化API"}
             ), 400
 
-        # 2. 解析分块参数
         rows, cols = parse_divide(divide)
 
-        # 3. 保存上传的图片
         image_path = save_upload_file(map_file)
         img_width, img_height = get_image_size(image_path)
 
         logging.info(f"收到图片: {map_file.filename}, 尺寸: {img_width}x{img_height}")
         logging.info(f"分块: {rows} x {cols}")
 
-        # 4. 调用AI分析地形
+        # 【优化】使用共享管道函数
         logging.info("开始AI地形分析...")
-        terrain_data = analyzer.analyze_terrain(
-            image_path=image_path,
-            rows=rows,
-            cols=cols,
-            max_workers=2,
+        _, _, _, _, threat_matrix, keypoints = _run_terrain_analysis(
+            analyzer_local, assessor, planner, image_path, rows, cols
         )
 
-        logging.info(f"AI分析完成，识别到 {len(terrain_data)} 个地形要素")
-
-        # 5. 威胁评估
-        df, unique_x, unique_y = assessor.assess_terrain(terrain_data)
-        threat_matrix = assessor.build_threat_matrix(df, unique_x, unique_y)
-
         logging.info(f"威胁矩阵构建完成: {threat_matrix.shape}")
-
-        # 6. 检测关键点并生成路径
-        keypoints = planner.detect_keypoints(threat_matrix)
 
         path_coords = None
         best_path_length = 0
@@ -463,14 +501,12 @@ def get_heatmap():
             path_coords = [all_points[idx] for idx in best_path]
             best_path_length = float(best_len)
             logging.info(f"路径规划: {len(path_coords)} 点, 长度: {best_path_length:.2f}")
-        
-        # 7. 生成纯热力图（与原图尺寸一致，无坐标轴图例）
+
         output_size = (img_width, img_height)
         fig = planner.get_pure_heatmap(threat_matrix, output_size)
         heatmap_url = save_output_image(fig, "heatmap")
         logging.info(f"纯热力图生成完成: {heatmap_url}")
 
-        # 8. 生成路径图（与原图尺寸一致，无坐标轴图例）
         pathmap_url = ""
         if path_coords:
             fig_path = planner.get_pure_pathmap(threat_matrix, path_coords, output_size)
@@ -570,33 +606,23 @@ def get_threat_data():
     输入: divide, map_picture, start_point
     返回: task_id
     """
-    global analyzer
-
     try:
         divide = request.form.get("divide", "").strip()
         map_file = request.files.get("map_picture")
         start_point_str = request.form.get("start_point", "0,0").strip()
 
+        analyzer_local = _get_analyzer()
+
         if not divide:
             return jsonify({"success": False, "error": "分块参数不能为空"}), 400
         if not map_file:
             return jsonify({"success": False, "error": "地图图片不能为空"}), 400
-        if analyzer is None:
+        if analyzer_local is None:
             return jsonify({"success": False, "error": "请先调用 /api/init 初始化API"}), 400
 
         rows, cols = parse_divide(divide)
 
-        try:
-            start_parts = start_point_str.split(",")
-            if len(start_parts) != 2:
-                raise ValueError("起始区块格式错误，应为 '行,列'，如 '1,1'")
-            start_row = int(start_parts[0].strip())
-            start_col = int(start_parts[1].strip())
-            if start_row < 0 or start_col < 0 or start_row >= rows or start_col >= cols:
-                raise ValueError(f"起始区块超出范围，应在 0-{rows-1}, 0-{cols-1} 之间")
-            start_point = (start_row, start_col)
-        except Exception as e:
-            raise ValueError(f"起始区块参数解析失败: {e}")
+        start_point = parse_start_point(start_point_str, rows, cols)
 
         image_path = save_upload_file(map_file)
         img_width, img_height = get_image_size(image_path)
@@ -606,7 +632,7 @@ def get_threat_data():
         logging.info(f"起始区块: {start_point}")
 
         payload = {
-            "analyzer": analyzer,
+            "analyzer": analyzer_local,
             "assessor": assessor,
             "planner": planner,
             "image_path": image_path,
@@ -706,6 +732,23 @@ def index():
 }</pre>
         </div>
         
+        <div class="api-card">
+            <h2>3.5 地图区域分析 (新增)</h2>
+            <code>POST /api/analyze_map_region</code>
+            <p>输入经纬度边界，后端自动下载拼接卫星瓦片并分析</p>
+            <pre>JSON:
+{
+    "north": 30.29, "south": 30.27,
+    "east": 120.14, "west": 120.12,
+    "zoom": 16,
+    "divide": "4*4",
+    "start_point": "1,1",
+    "tile_source": "esri"
+}
+返回: {"task_id": "xxx", "status": "pending"}
+</pre>
+        </div>
+
         <div class="api-card">
             <h2>4. 获取威胁数据</h2>
             <code>POST /api/get_threat_data</code>
@@ -993,6 +1036,391 @@ def get_user_stats():
     except Exception as e:
         logging.error(f"获取用户统计失败: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ========================== 地图瓦片拼接与分析 ==========================
+
+TILE_SIZE = 256
+GROUND_RESOLUTION_CONST = 156543.03392
+
+
+def _lat_lon_to_tile(lat, lon, zoom):
+    n = 2 ** zoom
+    x = (lon + 180.0) / 360.0 * n
+    y = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n
+    return int(x), int(y)
+
+
+def _tile_to_lat_lon(x, y, zoom):
+    n = 2 ** zoom
+    lon = (x + 0.5) / n * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+    return lat, lon
+
+
+def _pixel_to_lat_lon(px, py, x_start, y_start, zoom):
+    n = 2 ** zoom
+    total_px = n * TILE_SIZE
+    lon = (x_start * TILE_SIZE + px) / total_px * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y_start * TILE_SIZE + py) / total_px))))
+    return lat, lon
+
+
+def _compute_scale(lat, zoom):
+    return GROUND_RESOLUTION_CONST * math.cos(math.radians(lat)) / (2 ** zoom)
+
+
+def _fetch_elevations(points):
+    """Open-Meteo 免费高程 API, 分批请求 (每批最多100点)"""
+    results = []
+    for i in range(0, len(points), 100):
+        batch = points[i:i + 100]
+        lats = ",".join(f"{p[0]:.6f}" for p in batch)
+        lons = ",".join(f"{p[1]:.6f}" for p in batch)
+        url = f"https://api.open-meteo.com/v1/elevation?latitude={lats}&longitude={lons}"
+        req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            results.extend(data.get("elevation", []))
+        except Exception as e:
+            logging.error(f"高程API失败: {e}")
+            return None
+    return results
+
+
+def _build_contour_image(x_start, y_start, zoom, cols, rows):
+    """用DEM数据本地绘制彩色等高线地形图"""
+    import numpy as np
+    from scipy.ndimage import zoom as ndi_zoom
+
+    total_w, total_h = cols * TILE_SIZE, rows * TILE_SIZE
+
+    nx, ny = 20, 20
+    pts = []
+    for j in range(ny):
+        for i in range(nx):
+            px = (i + 0.5) * total_w / nx
+            py = (j + 0.5) * total_h / ny
+            pts.append(_pixel_to_lat_lon(px, py, x_start, y_start, zoom))
+
+    elevs = _fetch_elevations(pts)
+    if elevs is None or len(elevs) != len(pts):
+        raise RuntimeError("无法获取采样高程")
+
+    grid = np.array(elevs, dtype=float).reshape((ny, nx))
+    big = ndi_zoom(grid, (256 / ny, 256 / nx), order=1)
+    vmin = np.floor(grid.min() / 10) * 10
+    vmax = np.ceil(grid.max() / 10) * 10
+
+    rng = vmax - vmin
+    if rng <= 30:
+        interval = 5
+    elif rng <= 100:
+        interval = 10
+    elif rng <= 300:
+        interval = 25
+    else:
+        interval = 50
+    levels = np.arange(vmin, vmax + interval / 2, interval)
+
+    fig = plt.figure(figsize=(total_w / 100, total_h / 100), dpi=100)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(big, cmap="terrain", origin="upper", vmin=vmin, vmax=vmax, interpolation="bicubic")
+    cs = ax.contour(big, levels=levels, colors="k", linewidths=0.6, alpha=0.8)
+    ax.clabel(cs, inline=True, fontsize=6, fmt="%d")
+    ax.axis("off")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=100)
+    plt.close(fig)
+    buf.seek(0)
+    img = Image.open(buf).convert("RGB")
+    return img
+
+
+def _stitch_map_tiles(north, south, east, west, zoom, tile_source):
+    """按经纬度边界下载/构造瓦片拼接图, 返回 PIL Image"""
+    x_min, y_top = _lat_lon_to_tile(north, west, zoom)
+    x_max, y_bot = _lat_lon_to_tile(south, east, zoom)
+    tile_cols = x_max - x_min + 1
+    tile_rows = y_bot - y_top + 1
+    if tile_cols > 10 or tile_rows > 10:
+        raise ValueError(f"区域过大 ({tile_cols}x{tile_rows} 瓦片), 请放大后重试")
+
+    x_start, y_start = x_min, y_top
+
+    if tile_source == "demcontour":
+        return _build_contour_image(x_start, y_start, zoom, tile_cols, tile_rows), x_start, y_start
+
+    canvas = Image.new("RGB", (tile_cols * TILE_SIZE, tile_rows * TILE_SIZE), (128, 128, 128))
+    logging.info(f"下载瓦片: {tile_cols}x{tile_rows}, zoom={zoom}, source={tile_source}")
+
+    for r in range(tile_rows):
+        for c in range(tile_cols):
+            url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom}/{y_top + r}/{x_min + c}"
+            req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = resp.read()
+                tile = Image.open(io.BytesIO(data)).convert("RGB")
+                canvas.paste(tile, (c * TILE_SIZE, r * TILE_SIZE))
+            except Exception as e:
+                logging.warning(f"瓦片下载失败 ({x_min + c},{y_top + r}): {e}")
+    return canvas, x_start, y_start
+
+
+@app.route("/api/analyze_map_region", methods=["POST"])
+def analyze_map_region():
+    """
+    新增接口: 通过地图经纬度边界启动分析 (无需上传文件)
+    输入 JSON: { north, south, east, west, zoom, divide, start_point, tile_source }
+    返回: { task_id }
+    """
+    try:
+        data = request.get_json(force=True)
+        if not data:
+            return jsonify({"success": False, "error": "请提供JSON请求体"}), 400
+
+        north = float(data.get("north", 0))
+        south = float(data.get("south", 0))
+        east = float(data.get("east", 0))
+        west = float(data.get("west", 0))
+        zoom = int(data.get("zoom", 16))
+        divide = str(data.get("divide", "")).strip()
+        start_point_str = str(data.get("start_point", "1,1")).strip()
+        tile_source = str(data.get("tile_source", "esri")).strip()
+
+        analyzer_local = _get_analyzer()
+        if analyzer_local is None:
+            return jsonify({"success": False, "error": "请先调用 /api/init 初始化API"}), 400
+        if not divide:
+            return jsonify({"success": False, "error": "分块参数不能为空"}), 400
+        if north <= south or east <= west:
+            return jsonify({"success": False, "error": "经纬度边界无效"}), 400
+
+        rows, cols = parse_divide(divide)
+        start_point = parse_start_point(start_point_str, rows, cols)
+
+        logging.info(f"地图区域分析: {north:.4f},{west:.4f} - {south:.4f},{east:.4f}, zoom={zoom}")
+        logging.info(f"瓦片源: {tile_source}, 分块: {rows}x{cols}, 起点: {start_point}")
+
+        # 下载/构造拼接图
+        stitched_img, tile_x_start, tile_y_start = _stitch_map_tiles(
+            north, south, east, west, zoom, tile_source
+        )
+        img_width, img_height = stitched_img.size
+        image_path = os.path.join(UPLOAD_FOLDER, f"map_{uuid.uuid4().hex[:8]}.png")
+        stitched_img.save(image_path)
+        logging.info(f"拼接图保存: {image_path}, 尺寸: {img_width}x{img_height}")
+
+        payload = {
+            "analyzer": analyzer_local,
+            "assessor": assessor,
+            "planner": planner,
+            "image_path": image_path,
+            "img_width": img_width,
+            "img_height": img_height,
+            "rows": rows,
+            "cols": cols,
+            "start_point": start_point,
+        }
+        task_id, _ = create_task_record("analyze_map_region", payload)
+        worker = threading.Thread(target=process_threat_task, args=(task_id,), daemon=True)
+        worker.start()
+
+        return jsonify({"success": True, "task_id": task_id, "status": "pending"})
+
+    except Exception as e:
+        logging.error(f"地图区域分析失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ========================== 瓦片服务 ==========================
+
+_tile_cache = {}
+_tile_cache_max = 300
+
+
+def _generate_contour_tile_bytes(x, y, z):
+    """为单个瓦片生成等高线图 PNG (DEM采样 -> matplotlib等高线)"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy.ndimage import zoom as ndi_zoom
+
+    # 瓦片四角经纬度 (NW和SE)
+    n = 2 ** z
+    lat_n = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+    lon_w = x / n * 360.0 - 180.0
+    lat_s = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
+    lon_e = (x + 1) / n * 360.0 - 180.0
+
+    # 10x10 DEM采样点
+    nx, ny = 10, 10
+    pts = []
+    for j in range(ny):
+        for i in range(nx):
+            lat = lat_n - (j + 0.5) * (lat_n - lat_s) / ny
+            lon = lon_w + (i + 0.5) * (lon_e - lon_w) / nx
+            pts.append((lat, lon))
+
+    elevs = _fetch_elevations(pts)
+    if elevs is None or len(elevs) < nx * ny:
+        img = Image.new("RGB", (TILE_SIZE, TILE_SIZE), (200, 220, 200))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    grid = np.array(elevs, dtype=float).reshape((ny, nx))
+    big = ndi_zoom(grid, (256 / ny, 256 / nx), order=1)
+    vmin = np.floor(grid.min() / 10) * 10
+    vmax = np.ceil(grid.max() / 10) * 10
+    if vmax <= vmin:
+        vmax = vmin + 10
+
+    rng = vmax - vmin
+    if rng <= 20:
+        interval = 5
+    elif rng <= 80:
+        interval = 10
+    elif rng <= 200:
+        interval = 25
+    else:
+        interval = 50
+    levels = np.arange(vmin, vmax + interval / 2, interval)
+
+    fig = plt.figure(figsize=(2.56, 2.56), dpi=100)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(big, cmap="terrain", origin="upper", vmin=vmin, vmax=vmax, interpolation="bicubic")
+    cs = ax.contour(big, levels=levels, colors="k", linewidths=0.4, alpha=0.7)
+    ax.clabel(cs, inline=True, fontsize=5, fmt="%d")
+    ax.axis("off")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="PNG", dpi=100)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@app.route("/api/map_overlay", methods=["POST"])
+def map_overlay():
+    """生成等高线叠加图 (透明背景 + 等高线 + 注记), 用于地图覆盖层"""
+    try:
+        import matplotlib.pyplot as plt
+        data = request.get_json(force=True)
+        if not data:
+            return jsonify({"success": False, "error": "缺少请求体"}), 400
+
+        north = float(data["north"])
+        south = float(data["south"])
+        east = float(data["east"])
+        west = float(data["west"])
+        zoom = int(data.get("zoom", 16))
+
+        import numpy as np
+        from scipy.ndimage import zoom as ndi_zoom
+
+        nx, ny = 20, 20
+        pts = []
+        for j in range(ny):
+            for i in range(nx):
+                lat = north - (j + 0.5) * (north - south) / ny
+                lon = west + (i + 0.5) * (east - west) / nx
+                pts.append((lat, lon))
+
+        elevs = _fetch_elevations(pts)
+        if elevs is None or len(elevs) < nx * ny:
+            return jsonify({"success": False, "error": "无法获取高程数据"}), 500
+
+        grid = np.array(elevs, dtype=float).reshape((ny, nx))
+        big = ndi_zoom(grid, (256 / ny, 256 / nx), order=1)
+        rng = grid.max() - grid.min()
+        if rng <= 30: interval = 5
+        elif rng <= 100: interval = 10
+        elif rng <= 300: interval = 25
+        else: interval = 50
+        levels = np.arange(np.floor(grid.min() / 10) * 10, grid.max() + interval / 2, interval)
+
+        x_min, y_top = _lat_lon_to_tile(north, west, zoom)
+        x_max, y_bot = _lat_lon_to_tile(south, east, zoom)
+        canvas_w = (x_max - x_min + 1) * TILE_SIZE
+        canvas_h = (y_bot - y_top + 1) * TILE_SIZE
+        dpi = 100
+        fig = plt.figure(figsize=(canvas_w / dpi, canvas_h / dpi), dpi=dpi)
+        fig.patch.set_alpha(0)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_facecolor((0, 0, 0, 0))
+
+        ax.imshow(big, cmap="terrain", alpha=0.35, origin="upper",
+                  vmin=np.floor(grid.min() / 10) * 10, vmax=np.ceil(grid.max() / 10) * 10,
+                  extent=[0, canvas_w, canvas_h, 0], interpolation="bicubic")
+        cs = ax.contour(np.linspace(0, canvas_w, big.shape[1]),
+                        np.linspace(0, canvas_h, big.shape[0]),
+                        big, levels=levels, colors="#1a1a2e", linewidths=1.2, alpha=0.85)
+        ax.clabel(cs, inline=True, fontsize=7, fmt="%d", colors="#1a1a2e")
+        ax.axis("off")
+        ax.set_xlim(0, canvas_w)
+        ax.set_ylim(canvas_h, 0)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="PNG", dpi=dpi, transparent=True, bbox_inches="tight", pad_inches=0)
+        plt.close(fig)
+        buf.seek(0)
+
+        fname = f"overlay_{uuid.uuid4().hex[:8]}.png"
+        fpath = os.path.join(OUTPUT_FOLDER, fname)
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+        with open(fpath, "wb") as f:
+            f.write(buf.getvalue())
+
+        url = url_for("static", filename=f"output/{fname}", _external=False)
+        return jsonify({
+            "success": True,
+            "image_url": url,
+            "bounds": {"north": north, "south": south, "east": east, "west": west},
+        })
+    except Exception as e:
+        logging.error(f"等高线叠加图生成失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tile/<source>/<int:z>/<int:x>/<int:y>.png", methods=["GET"])
+def serve_tile(source, z, x, y):
+    """统一瓦片服务: esri=代理卫星图, demcontour=本地生成等高线"""
+    cache_key = f"{source}/{z}/{x}/{y}"
+
+    if cache_key in _tile_cache:
+        return _tile_cache[cache_key], 200, {"Content-Type": "image/png"}
+
+    if source == "demcontour":
+        try:
+            png_data = _generate_contour_tile_bytes(x, y, z)
+        except Exception as e:
+            logging.error(f"等高线瓦片生成失败: {e}")
+            png_data = b""
+    else:
+        # esri 或任何其他源 -> 代理 Esri 卫星
+        url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                png_data = resp.read()
+        except Exception as e:
+            logging.warning(f"瓦片代理失败 ({z}/{x}/{y}): {e}")
+            png_data = b""
+
+    if len(_tile_cache) >= _tile_cache_max:
+        # 清理一半缓存
+        for k in list(_tile_cache.keys())[:_tile_cache_max // 2]:
+            del _tile_cache[k]
+
+    _tile_cache[cache_key] = png_data
+    return png_data, 200, {"Content-Type": "image/png"}
 
 
 if __name__ == "__main__":

@@ -62,13 +62,39 @@ const router = createRouter({
   routes
 })
 
-// 路由守卫：设置页面标题
+// 【认证守卫】保护 dashboard 路由，未登录自动跳转登录页
 router.beforeEach((to, from, next) => {
+  // 设置页面标题
   if (to.meta.title) {
     document.title = `${to.meta.title} - TerraiNav`
   } else {
     document.title = 'TerraiNav地形适应无人机巡逻系统'
   }
+
+  // 检查目标路由是否需要认证
+  const requiresAuth = to.path.startsWith('/dashboard')
+  const isLoginPage = to.path === '/login'
+
+  if (requiresAuth) {
+    const token = localStorage.getItem('terrainav_token')
+    if (!token) {
+      // 未登录 → 重定向到登录页
+      console.log('[路由守卫] 未登录，跳转登录页')
+      next('/login')
+      return
+    }
+  }
+
+  // 已登录用户访问登录页 → 重定向到仪表板
+  if (isLoginPage) {
+    const token = localStorage.getItem('terrainav_token')
+    if (token) {
+      console.log('[路由守卫] 已登录，跳转仪表板')
+      next('/dashboard/map-analysis')
+      return
+    }
+  }
+
   next()
 })
 

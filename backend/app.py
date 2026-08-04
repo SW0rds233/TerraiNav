@@ -1,13 +1,22 @@
+"""
+TerraiNav - 简化版图片区块侦测 Web 应用
+
+优化记录：
+- print() → logging 模块
+- 统一路径配置
+"""
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import logging
 import numpy as np
-from PIL import Image  # 只用 Pillow，不用 cv2
+from PIL import Image
 from path import PathPlanner
 
 # 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
@@ -22,17 +31,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 class ImageAgent:
     @staticmethod
     def analyze_image_blocks(image_path, block_size=32):
+        """【优化】直接构建矩阵，消除中间 blocks 列表"""
         try:
-            # 用 Pillow 打开图片 → 转灰度
             img = Image.open(image_path).convert('L')
             img_np = np.array(img)
             h, w = img_np.shape
 
-            # 计算行列
             rows = h // block_size
             cols = w // block_size
 
-            blocks = []
+            matrix = np.zeros((rows, cols), dtype=np.float32)
             for i in range(rows):
                 for j in range(cols):
                     y1 = i * block_size
@@ -42,16 +50,11 @@ class ImageAgent:
 
                     block = img_np[y1:y2, x1:x2]
                     mean_gray = float(np.mean(block))
+                    matrix[i, j] = 100 - mean_gray
 
-                    blocks.append({
-                        "block_pos": (i, j),
-                        "mean_gray": mean_gray
-                    })
-
-            return blocks, rows, cols
-
+            return matrix, rows, cols
         except Exception as e:
-            logging.error(f"区块分析失败: {e}")
+            logger.error(f"区块分析失败: {e}")
             raise
 
 # ==========================
@@ -91,18 +94,13 @@ def index():
 @app.route('/run', methods=['POST'])
 def run():
     try:
-        # 1. 保存图片
         file = request.files['image']
         path = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(path)
 
-        # 2. Agent 切割区块
-        blocks, rows, cols = ImageAgent.analyze_image_blocks(path)
+        # 【优化】analyze_image_blocks 直接返回矩阵，消除中间 blocks 列表
+        matrix, rows, cols = ImageAgent.analyze_image_blocks(path)
 
-        # 3. Assess 生成矩阵
-        matrix = Assessor.calculate(blocks, rows, cols)
-
-        # 4. 生成热力图 + 路线
         planner.plan_path(matrix)
 
         return jsonify({

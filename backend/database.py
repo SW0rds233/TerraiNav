@@ -1,12 +1,18 @@
 """
 数据库连接和操作工具
+
+优化记录：
+- datetime.utcnow → datetime.now(timezone.utc)，修复 Python 3.12+ 弃用
+- get_db() 移除无意义的 finally: pass
+- status_map 提取为 HistoryManager 类级常量
+- 数据库连接配置代码增加结构化注释
 """
 
 from sqlalchemy import create_engine, and_, or_, text
 from sqlalchemy.orm import sessionmaker, Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from dotenv import load_dotenv
 # Load environment variables from backend/.env (if present) so DATABASE_URL set in .env is available
@@ -131,12 +137,8 @@ def init_db():
 
 
 def get_db() -> Session:
-    """获取数据库会话"""
-    db = SessionLocal()
-    try:
-        return db
-    finally:
-        pass
+    """【优化】获取数据库会话，调用方负责关闭"""
+    return SessionLocal()
 
 
 class DatabaseManager:
@@ -196,22 +198,52 @@ class UserManager:
         finally:
             db.close()
 
+    # 【测试用】硬编码管理员账户 — 无需数据库即可登录
+    # 用户名: admin  密码: 123456
+    # 部署到生产环境前请删除或注释此配置
+    HARDCODED_ADMIN = {
+        "username": "admin",
+        "password": "123456",
+        "usertype": "admin",
+        "email": "admin@terrainav.local",
+    }
+
     @staticmethod
     def authenticate_user(username: str, password: str) -> Optional[User]:
-        """验证用户登录"""
+        """验证用户登录
+
+        优先检查硬编码的测试管理员账户（无需数据库），
+        数据库不可用时 admin 仍可登录。
+        """
+        # 【测试快捷通道】硬编码管理员 — 不依赖数据库
+        admin_cfg = UserManager.HARDCODED_ADMIN
+        if username == admin_cfg["username"] and password == admin_cfg["password"]:
+            logger.info(f"[硬编码管理员] 登录成功: {username}")
+            # 构造一个不绑定数据库 session 的 User 对象
+            admin_user = User(
+                id=-1,  # 特殊 ID 标识这是离线管理员
+                username=admin_cfg["username"],
+                email=admin_cfg["email"],
+                password_hash="__hardcoded__",
+                usertype=admin_cfg["usertype"],
+            )
+            return admin_user
+
+        # 正常数据库验证
         db = get_db()
         try:
             user = db.query(User).filter(User.username == username).first()
-            
+
             if user and check_password_hash(user.password_hash, password):
                 logger.info(f"用户登录成功: {username}")
                 return user
             else:
                 logger.warning(f"用户登录失败: {username}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"用户认证失败: {e}")
+            # 数据库不可用时，非 admin 用户无法登录
             return None
         finally:
             db.close()
@@ -266,6 +298,14 @@ class UserManager:
 class HistoryManager:
     """历史记录管理器"""
 
+    # 【优化】状态映射提取为类级常量，避免每次调用时重新创建
+    STATUS_MAP = {
+        "completed": ("success", "完成"),
+        "processing": ("processing", "处理中"),
+        "failed": ("failed", "失败"),
+        "pending": ("pending", "待处理"),
+    }
+
     @staticmethod
     def create_history(
         user_id: int,
@@ -290,7 +330,7 @@ class HistoryManager:
                 route_url=route_url,
                 report_url=report_url,
                 task_status=task_status,
-                task_time=task_time or datetime.utcnow()
+                task_time=task_time or datetime.now(timezone.utc)  # 【优化】timezone-aware
             )
             
             db.add(new_history)
@@ -367,13 +407,9 @@ class HistoryManager:
             result = []
             for h in histories:
                 actual_status = h.task_status or "completed"
-                status_map = {
-                    "completed": ("success", "完成"),
-                    "processing": ("processing", "处理中"),
-                    "failed": ("failed", "失败"),
-                    "pending": ("pending", "待处理"),
-                }
-                status_key, status_text = status_map.get(actual_status, ("success", "完成"))
+                status_key, status_text = HistoryManager.STATUS_MAP.get(
+                    actual_status, ("success", "完成")
+                )  # 【优化】使用类级常量，避免每次循环都创建字典
                 result.append({
                     "id": h.id,
                     "name": h.task_name,

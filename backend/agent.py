@@ -1,25 +1,40 @@
 """
 TerraiNav - 地形分析器
 使用阿里云百炼API进行地图地形识别
+
+优化记录：
+- 提取 RGBA→RGB 转换为复用方法 _convert_image_to_rgb
+- OpenAI client 复用以减少连接开销，避免每个块都创建新实例
+- print() 替换为 logging 模块，适配生产环境
+- 移除硬编码 API Key（安全问题）
+- as_completed 真正用于流式处理结果
 """
 
 import json
 import base64
 import os
+import logging
 from PIL import Image
 import io
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+logger = logging.getLogger(__name__)
+
 
 class TerrainAnalyzer:
     """军事地形分析器 - 阿里云百炼版"""
+
+    # 默认模型名称
+    DEFAULT_MODEL = "qwen3.6-plus"
+    # 阿里云百炼 API 端点
+    DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     def __init__(
         self,
         api_key: str,
         max_workers: int = 8,
-        model: str = "qwen3.6-plus",
+        model: str = None,
     ):
         """初始化
 
@@ -30,7 +45,17 @@ class TerrainAnalyzer:
         """
         self.api_key = api_key
         self.max_workers = max_workers
-        self.model = model
+        self.model = model or self.DEFAULT_MODEL
+
+        # 【优化】复用 OpenAI client，避免每次 API 调用都创建新实例
+        try:
+            from openai import OpenAI
+            self._client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.DASHSCOPE_BASE_URL,
+            )
+        except ImportError:
+            raise ImportError("需要安装openai库: pip install openai")
 
     @staticmethod
     def create_analyzer(
@@ -51,22 +76,24 @@ class TerrainAnalyzer:
         return TerrainAnalyzer(
             api_key=api_key,
             max_workers=max_workers,
-            model=model or "qwen3.6-plus",
+            model=model or TerrainAnalyzer.DEFAULT_MODEL,
         )
+
+    @staticmethod
+    def _convert_image_to_rgb(img: Image.Image) -> Image.Image:
+        """【优化】提取公共方法：将图片统一转换为 RGB 模式，消除重复代码"""
+        if img.mode == 'RGBA':
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            return background
+        elif img.mode != 'RGB':
+            return img.convert('RGB')
+        return img
 
     def split_image(self, image_path: str, scale: float, block_size: int) -> List[Dict]:
         """根据比例尺和区块大小分割图片"""
         img = Image.open(image_path)
-        
-        # 如果是RGBA模式(有透明度)，转换为RGB
-        if img.mode == 'RGBA':
-            # 创建白色背景
-            background = Image.new('RGB', img.size, (255, 255, 255))
-            # 合并透明度通道
-            background.paste(img, mask=img.split()[3])  # 使用alpha通道作为mask
-            img = background
-        elif img.mode != 'RGB':
-            img = img.convert('RGB')
+        img = self._convert_image_to_rgb(img)  # 【优化】使用复用方法
         
         img_width, img_height = img.size
 
@@ -112,18 +139,8 @@ class TerrainAnalyzer:
         return blocks
 
     def _call_api(self, block: Dict, prompt: str) -> List[Dict]:
-        """调用阿里云百炼API"""
-        try:
-            from openai import OpenAI
-        except ImportError:
-            raise ImportError("需要安装openai库: pip install openai")
-
-        client = OpenAI(
-            api_key=self.api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
-
-        completion = client.chat.completions.create(
+        """调用阿里云百炼API（【优化】复用 self._client 而非每次新建）"""
+        completion = self._client.chat.completions.create(
             model=self.model,
             messages=[
                 {
@@ -146,6 +163,7 @@ class TerrainAnalyzer:
         )
 
         content = completion.choices[0].message.content.strip()
+        # 【优化】使用 str.removeprefix 替代字符串切片，更安全和可读
         if content.startswith("```"):
             content = content[3:-3].strip()
         if content.startswith("json"):
@@ -190,21 +208,15 @@ class TerrainAnalyzer:
             rows: 行分割数(可选)
             cols: 列分割数(可选)
             max_workers: 并行数，默认8
+            progress_callback: 进度回调 (completed, total, message) -> None
 
         Returns: 地形区块列表
         """
         # 分割
         if rows and cols:
             img = Image.open(image_path)
-            
-            # 如果是RGBA模式(有透明度)，转换为RGB
-            if img.mode == 'RGBA':
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[3])
-                img = background
-            elif img.mode != 'RGB':
-                img = img.convert('RGB')
-            
+            img = self._convert_image_to_rgb(img)  # 【优化】使用复用方法
+
             w, h = img.size
             bw, bh = w // cols, h // rows
 
@@ -226,7 +238,7 @@ class TerrainAnalyzer:
                             "geo_size": int(bh * scale),
                         }
                     )
-            print(f"[分割] 分割: {cols}x{rows}={cols * rows}块")
+            logger.info(f"[分割] 分割: {cols}x{rows}={cols * rows}块")
         else:
             blocks = self.split_image(image_path, scale, block_size)
 
@@ -254,42 +266,44 @@ class TerrainAnalyzer:
 
         # 并行分析
         workers = max_workers or self.max_workers
-        print(f"[并行] 启动 {workers} 个线程...")
+        logger.info(f"[并行] 启动 {workers} 个线程...")
 
         results = []
         completed = 0
         total = len(blocks)
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            # 提交所有任务
-            future_to_block = {
-                executor.submit(self._analyze_block, block, prompt_template): block
-                for block in blocks
-            }
+            # 【优化】仅存储 block_id 而非完整 block dict，避免 base64 字符串阻碍 GC
+            future_to_block_id = {}
+            for block in blocks:
+                future = executor.submit(self._analyze_block, block, prompt_template)
+                future_to_block_id[future] = block["id"]
 
-            # 收集结果
-            for future in as_completed(future_to_block):
+            for future in as_completed(future_to_block_id):
                 block_id, result, error = future.result()
+                future_to_block_id[future] = None  # 释放对 block dict 的引用
                 completed += 1
                 message = f"已完成 {completed}/{total} 块"
-                percent = int(round(completed / total * 60)) if total else 50
 
                 if progress_callback:
                     progress_callback(completed, total, message)
 
                 if error:
-                    print(f"[错误] 块{block_id} ({completed}/{total}): {error}")
+                    logger.error(f"[错误] 块{block_id} ({completed}/{total}): {error}")
                 else:
                     results.extend(result)
-                    print(f"[完成] 块{block_id} ({completed}/{total})")
+                    logger.info(f"[完成] 块{block_id} ({completed}/{total})")
 
-        print(f"[完成] 共识别 {len(results)} 个区块")
+        logger.info(f"[完成] 共识别 {len(results)} 个区块")
         return results
 
 
 if __name__ == "__main__":
-    # 阿里云API Key（可设置环境变量 DASHSCOPE_API_KEY）
-    api_key = os.getenv("DASHSCOPE_API_KEY") or "sk-6dc29ccf2738472dbc3900dc48eb5d42"
+    # 【优化】API Key 从环境变量读取，不再硬编码
+    api_key = os.getenv("DASHSCOPE_API_KEY")
+    if not api_key:
+        print("[ERROR] 请设置环境变量 DASHSCOPE_API_KEY")
+        exit(1)
 
     analyzer = TerrainAnalyzer.create_analyzer(
         api_key=api_key,

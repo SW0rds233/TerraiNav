@@ -1,15 +1,63 @@
+"""
+TerraiNav - 路径规划与可视化
+
+优化记录：
+- 提取 create_threat_colormap() 消除 5 处重复的热力图颜色映射生成代码
+- ACO 增加收敛检测，连续 N 轮无改进则提前终止
+- build_path 增加除零保护
+- add_direction_indicators 参数 original_rows 默认值从 1 改为 None，自动适配
+- print() 替换为 logging
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from itertools import product
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.interpolate import RectBivariateSpline
+import logging
 
 plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["font.family"] = "Microsoft YaHei"
 import warnings
 
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 【优化】公共工具函数：热力图颜色映射生成（消除 5+ 处重复代码）
+# ============================================================================
+def create_threat_colormap(mat_min: float, mat_max: float, n_colors: int = 256):
+    """
+    根据矩阵数值范围生成绿→黄→红渐变色映射。
+
+    Args:
+        mat_min: 矩阵最小值
+        mat_max: 矩阵最大值
+        n_colors: 颜色数量，默认 256
+
+    Returns:
+        matplotlib.colors.LinearSegmentedColormap
+    """
+    mid_value = (mat_min + mat_max) / 2.0
+    colors_custom = []
+    for i in range(n_colors):
+        value = mat_min + (i / (n_colors - 1)) * (mat_max - mat_min)
+        if value <= mid_value:
+            ratio = (value - mat_min) / (mid_value - mat_min) if mid_value > mat_min else 0.5
+            r = int(ratio * 255)
+            g = 255
+            b = 0
+        else:
+            ratio = (value - mid_value) / (mat_max - mid_value) if mat_max > mid_value else 0.5
+            r = 255
+            g = int(255 * (1 - ratio))
+            b = 0
+        colors_custom.append(f"#{r:02x}{g:02x}{b:02x}")
+
+    return mcolors.LinearSegmentedColormap.from_list("threat_cmap", colors_custom, N=n_colors)
 
 
 def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_per_cluster=3):
@@ -24,14 +72,19 @@ def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_pe
     2. 对每个聚类生成多个关键点
     3. 额外强制包含所有评分≥70的区块，确保高威胁区域都被覆盖
     """
-    # 1. 热力值筛选高值点
+    # 1. 热力值筛选高值点 + 高评分点（合并为单次扫描，避免重复遍历）
     danger_threshold = np.quantile(matrix, quantile)
     rows, cols = matrix.shape
     high_value_points = []
+    high_score_points = []
+    high_score_threshold = 70.0
     for i in range(rows):
         for j in range(cols):
-            if matrix[i, j] >= danger_threshold:
+            val = matrix[i, j]
+            if val >= danger_threshold:
                 high_value_points.append((i, j))
+            if val >= high_score_threshold:
+                high_score_points.append((i, j))
 
     if not high_value_points:
         return []
@@ -66,18 +119,10 @@ def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_pe
             for p in selected_points:
                 keypoints.append((p[0], p[1]))
 
-    print(f"✅ 自动计算阈值：≥ {danger_threshold:.2f}")
-    print(f"   筛选到高值点：{len(high_value_points)} 个 → 聚类后关键点：{len(keypoints)} 个")
+    logger.info(f"自动计算阈值: >= {danger_threshold:.2f}")
+    logger.info(f"   筛选到高值点: {len(high_value_points)} 个 -> 聚类后关键点: {len(keypoints)} 个")
 
-    # 4. 额外添加所有评分超过70的区块
-    high_score_threshold = 70.0
-    high_score_points = []
-    for i in range(rows):
-        for j in range(cols):
-            if matrix[i, j] >= high_score_threshold:
-                high_score_points.append((i, j))
-
-    # 将高评分区块添加到关键点列表中（避免重复）
+    # 4. 将高评分区块（已在步骤1合并扫描）添加到关键点列表中（避免重复）
     existing_keypoints = set(keypoints)
     for point in high_score_points:
         if point not in existing_keypoints:
@@ -85,7 +130,7 @@ def detect_keypoints(matrix, quantile=0.65, cluster_threshold=1.4, max_points_pe
             existing_keypoints.add(point)
 
     if high_score_points:
-        print(f"   额外添加评分≥70的区块：{len(high_score_points)} 个 → 最终关键点：{len(keypoints)} 个")
+        logger.info(f"   额外添加评分>=70的区块: {len(high_score_points)} 个 -> 最终关键点: {len(keypoints)} 个")
 
     return keypoints
 
@@ -120,7 +165,7 @@ def upsample_matrix(matrix, factor=4, method="cubic"):
 
 
 def add_direction_indicators(
-    ax, path_coords, interval=5, arrow_length=0.4, arrow_width=0.2, original_rows=1
+    ax, path_coords, interval=5, arrow_length=0.4, arrow_width=0.2, original_rows=None
 ):
     """
     在航迹上添加方向指示箭头
@@ -152,7 +197,7 @@ def add_direction_indicators(
             # plot 使用: (col + 0.5, row + 0.5) 然后 y 轴反转
             # 所以 arrow 也需要反转 y 坐标
             mid_x = (start[1] + end[1]) / 2 + 0.5
-            mid_y = original_rows - ((start[0] + end[0]) / 2 + 0.5)
+            mid_y = (original_rows or 1) - ((start[0] + end[0]) / 2 + 0.5)  # 【优化】None 安全
 
             # 计算方向向量（col是x，row是y）
             # 在图片坐标系中，row 增大意味着向下移动
@@ -189,10 +234,16 @@ class PathPlanner:
         return detect_keypoints(matrix)
 
     class ACO_TSP:
-        """蚁群算法求解TSP"""
+        """蚁群算法求解TSP
+
+        优化记录：
+        - 增加收敛检测：连续 patience 轮无改进则提前终止
+        - build_path 增加除零保护
+        """
 
         def __init__(
-            self, points, ant_num=50, max_iter=200, alpha=1, beta=5, rho=0.1, Q=100
+            self, points, ant_num=50, max_iter=200, alpha=1, beta=5, rho=0.1, Q=100,
+            patience: int = 30
         ):
             self.points = np.array(points)
             self.point_num = len(points)
@@ -202,6 +253,7 @@ class PathPlanner:
             self.beta = beta
             self.rho = rho
             self.Q = Q
+            self.patience = patience  # 【优化】收敛容忍轮数
             self.dist_matrix = np.linalg.norm(
                 self.points[:, None] - self.points[None, :], axis=2
             )
@@ -212,9 +264,11 @@ class PathPlanner:
             self.history = []
 
         def run(self):
-            for _ in range(self.max_iter):
+            stagnate_count = 0  # 【优化】收敛检测计数器
+            for iteration in range(self.max_iter):
                 all_paths = []
                 all_lens = []
+                prev_best = self.best_len
                 for _ in range(self.ant_num):
                     path, path_len = self.build_path()
                     all_paths.append(path)
@@ -224,21 +278,38 @@ class PathPlanner:
                         self.best_path = path.copy()
                 self.update_pheromone(all_paths, all_lens)
                 self.history.append(self.best_len)
+
+                # 【优化】收敛检测
+                if abs(self.best_len - prev_best) < 1e-6:
+                    stagnate_count += 1
+                else:
+                    stagnate_count = 0
+
+                if stagnate_count >= self.patience:
+                    logger.info(f"ACO 收敛于第 {iteration + 1} 轮，提前终止")
+                    break
+
             return self.best_path, self.best_len
 
         def build_path(self):
             path = [0]
-            visited = set(path)
+            visited_mask = np.zeros(self.point_num, dtype=bool)
+            visited_mask[0] = True
             while len(path) < self.point_num:
                 cur = path[-1]
                 prob = (self.pheromone[cur] ** self.alpha) * (
                     (1.0 / self.dist_matrix[cur]) ** self.beta
                 )
-                prob[list(visited)] = 0
-                prob /= prob.sum()
-                next_p = np.random.choice(self.point_num, p=prob)
+                prob[visited_mask] = 0
+                prob_sum = prob.sum()
+                if prob_sum < 1e-12:
+                    remaining = np.where(~visited_mask)[0]
+                    next_p = np.random.choice(remaining)
+                else:
+                    prob /= prob_sum
+                    next_p = np.random.choice(self.point_num, p=prob)
                 path.append(next_p)
-                visited.add(next_p)
+                visited_mask[next_p] = True
             path.append(0)
             path_len = sum(
                 self.dist_matrix[path[k], path[k + 1]] for k in range(len(path) - 1)
@@ -248,9 +319,9 @@ class PathPlanner:
         def update_pheromone(self, all_paths, all_lens):
             self.pheromone *= 1 - self.rho
             for path, path_len in zip(all_paths, all_lens):
-                for k in range(len(path) - 1):
-                    i, j = path[k], path[k + 1]
-                    self.pheromone[i, j] += self.Q / path_len
+                rows = path[:-1]
+                cols = path[1:]
+                np.add.at(self.pheromone, (rows, cols), self.Q / path_len)
 
     def plan_path(self, threat_matrix):
         """
@@ -260,13 +331,13 @@ class PathPlanner:
         """
         # 1. 检测关键点
         keypoints = self.detect_keypoints(threat_matrix)
-        print(f"\n✅ 检测到关键点：{len(keypoints)} 个")
+        logger.info(f"[关键点检测] 检测到 {len(keypoints)} 个关键点")
         for idx, p in enumerate(keypoints):
-            print(f"关键点 {idx + 1}：{p} | 威胁分数：{threat_matrix[p]:.1f}")
+            logger.info(f"关键点 {idx + 1}: {p} | 威胁分数: {threat_matrix[p]:.1f}")
 
         # 2. ACO求解最短路径
         if not keypoints:
-            print("⚠️ 未检测到关键点，跳过路径规划")
+            logger.warning("未检测到关键点，跳过路径规划")
             self.plot_heatmap(threat_matrix)
             return
 
@@ -276,13 +347,14 @@ class PathPlanner:
         best_path, best_len = aco.run()
 
         # 输出最优路径
-        print("\n最优路径：")
+        logger.info("最优路径:")
         path_coords = []
         for idx in best_path:
             coord = all_points[idx]
             path_coords.append(coord)
-            print(coord, end=" → ")
-        print(f"\n最短路径长度：{best_len:.2f}")
+        path_str = " -> ".join(str(c) for c in path_coords)
+        logger.info(f"  {path_str}")
+        logger.info(f"最短路径长度: {best_len:.2f}")
 
         # 3. 可视化热力图+路径
         self.plot_heatmap_with_path(threat_matrix, path_coords)
@@ -398,31 +470,11 @@ class PathPlanner:
         original_rows, original_cols = matrix.shape
         upsampled_rows, upsampled_cols = grid_upscaled.shape
 
-        # 获取矩阵实际极值
         mat_min = matrix.min()
         mat_max = matrix.max()
 
-        # 生成自定义配色（从绿到红，基于矩阵实际数值范围）
-        colors_custom = []
-        for i in range(256):
-            value = mat_min + (i / 255) * (mat_max - mat_min)
-            mid_value = (mat_min + mat_max) / 2
-            if value <= mid_value:
-                ratio = (value - mat_min) / (mid_value - mat_min)
-                r = int(ratio * 255)
-                g = 255
-                b = 0
-            else:
-                ratio = (value - mid_value) / (mat_max - mid_value)
-                r = 255
-                g = int(255 * (1 - ratio))
-                b = 0
-            color = f"#{r:02x}{g:02x}{b:02x}"
-            colors_custom.append(color)
-
-        cmap = mcolors.LinearSegmentedColormap.from_list(
-            "custom_green_red", colors_custom, N=256
-        )
+        # 【优化】使用提取的公共颜色映射函数
+        cmap = create_threat_colormap(mat_min, mat_max)
 
         fig, ax = plt.subplots(figsize=(10, 8), dpi=100)
 
@@ -542,45 +594,24 @@ class PathPlanner:
 
     def get_pure_heatmap(self, matrix, output_size):
         """生成纯热力图，无坐标轴图例，尺寸与原图一致
-        
-        使用与heatmap.py相同的插值方法：RectBivariateSpline + pcolormesh gouraud shading
-        
+
         Args:
             matrix: 威胁度矩阵
             output_size: (width, height) 输出图片尺寸
         """
         width, height = output_size
         original_rows, original_cols = matrix.shape
-        
-        # 获取矩阵实际极值
+
         mat_min = matrix.min()
         mat_max = matrix.max()
-        
-        # 上采样增加分辨率（使用与heatmap.py相同的bicubic插值）
+
+        # 上采样增加分辨率
         upscale_factor = 8
         grid_upscaled, factor = upsample_matrix(matrix, factor=upscale_factor, method='cubic')
         upsampled_rows, upsampled_cols = grid_upscaled.shape
-        
-        # 生成热力图配色（与heatmap.py完全相同）
-        colors_custom = []
-        for i in range(256):
-            value = mat_min + (i / 255) * (mat_max - mat_min)
-            mid_value = (mat_min + mat_max) / 2
-            if value <= mid_value:
-                ratio = (value - mat_min) / (mid_value - mat_min)
-                r = int(ratio * 255)
-                g = 255
-                b = 0
-            else:
-                ratio = (value - mid_value) / (mat_max - mid_value)
-                r = 255
-                g = int(255 * (1 - ratio))
-                b = 0
-            colors_custom.append(f"#{r:02x}{g:02x}{b:02x}")
-        
-        cmap = mcolors.LinearSegmentedColormap.from_list(
-            "custom_green_red", colors_custom, N=256
-        )
+
+        # 【优化】使用提取的公共颜色映射函数
+        cmap = create_threat_colormap(mat_min, mat_max)
         
         # 创建图片，使用实际的输出尺寸（去除白边）
         fig, ax = plt.subplots(figsize=(width/100, height/100), dpi=100)

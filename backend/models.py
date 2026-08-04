@@ -1,13 +1,20 @@
 """
 数据库模型定义
 包含 users 和 history 两个表
+
+优化记录：
+- MEDIUMTEXT → Text 类型，移除 MySQL 方言依赖，兼容 SQLite/PostgreSQL/MySQL
+- datetime.utcnow → datetime.now(timezone.utc)，修复 Python 3.12+ 弃用警告
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
+
+# 【优化】使用 timezone-aware UTC 函数，替代已弃用的 datetime.utcnow
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 Base = declarative_base()
 
@@ -20,7 +27,7 @@ class User(Base):
     email = Column(String(100), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     usertype = Column(String(20), default="user")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     # 关联历史记录
     histories = relationship("History", back_populates="user", cascade="all, delete-orphan")
@@ -41,15 +48,16 @@ class History(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     task_name = Column(String(200), nullable=False)
-    description = Column(MEDIUMTEXT)
-    input_image_url = Column(MEDIUMTEXT)
-    heatmap_url = Column(MEDIUMTEXT)
-    route_url = Column(MEDIUMTEXT)
-    report_url = Column(MEDIUMTEXT)
+    # 【优化】使用 Text 替代 MEDIUMTEXT，兼容所有数据库方言
+    description = Column(Text)
+    input_image_url = Column(Text)
+    heatmap_url = Column(Text)
+    route_url = Column(Text)
+    report_url = Column(Text)
     task_status = Column(String(50), default="completed")
     task_time = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # 关联用户
     user = relationship("User", back_populates="histories")
