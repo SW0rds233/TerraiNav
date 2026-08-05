@@ -2,6 +2,18 @@
   <div class="map-selector">
     <div ref="mapContainer" class="map-container"></div>
 
+    <!-- 搜索定位 -->
+    <div class="map-search-bar">
+      <input
+        v-model="searchText"
+        @keyup.enter="doSearch"
+        type="text"
+        placeholder="输入地名或经纬度 (例: 北京 / 39.9,116.4)"
+        class="search-input"
+      />
+      <button @click="doSearch" class="search-btn" title="搜索定位">&#x1F50D;</button>
+    </div>
+
     <!-- 图例/状态条 -->
     <div class="map-status-bar">
       <div class="status-item" v-if="scaleDisplay">
@@ -80,8 +92,41 @@ let tileLayer: L.TileLayer | null = null
 let gridLayer: L.LayerGroup | null = null
 let contourOverlay: L.ImageOverlay | null = null
 const startBlock = ref<number | null>(null)
+const searchText = ref('')
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+
+// ========== 搜索定位 ==========
+async function doSearch() {
+  const q = searchText.value.trim()
+  if (!q || !mapInstance) return
+
+  // 尝试解析为经纬度 (例如: 39.9,116.4 或 39.9 116.4)
+  const coordMatch = q.match(/^(-?\d+\.?\d*)\s*[,，\s]\s*(-?\d+\.?\d*)$/)
+  if (coordMatch) {
+    const lat = parseFloat(coordMatch[1]!)
+    const lon = parseFloat(coordMatch[2]!)
+    if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+      mapInstance.setView([lat, lon], 14)
+      return
+    }
+  }
+
+  // 通过后端代理地理编码
+  try {
+    const resp = await fetch(`${API_BASE_URL}/api/geocode?q=${encodeURIComponent(q)}`)
+    const json = await resp.json() as { success: boolean; results?: Array<{ lat: number; lon: number; display_name: string }>; error?: string }
+    if (json.success && json.results && json.results.length > 0) {
+      const r = json.results[0]!
+      mapInstance.setView([r.lat, r.lon], 14)
+      searchText.value = r.display_name.split(',')[0] ?? q
+    } else {
+      alert(`未找到地点: ${q}`)
+    }
+  } catch {
+    alert('搜索失败，请检查网络后重试')
+  }
+}
 
 // ========== 瓦片图层切换 ==========
 function getTileUrl(source: string): string {
@@ -152,7 +197,7 @@ function updateGrid() {
         [lat, nw.lng],
         [lat, se.lng],
       ],
-      { color: '#ff4444', weight: 2, opacity: 0.6 },
+      { color: '#4a6cf7', weight: 2, opacity: 0.6 },
     ).addTo(gridLayer!)
   }
   for (let j = 0; j <= cols; j++) {
@@ -162,7 +207,7 @@ function updateGrid() {
         [nw.lat, lng],
         [se.lat, lng],
       ],
-      { color: '#ff4444', weight: 2, opacity: 0.6 },
+      { color: '#4a6cf7', weight: 2, opacity: 0.6 },
     ).addTo(gridLayer!)
   }
 
@@ -310,7 +355,7 @@ function updateContourOverlay() {
     contourOverlay = L.imageOverlay(
       props.contourOverlayUrl,
       [[b.south, b.west], [b.north, b.east]],
-      { opacity: props.contourOpacity / 100 },
+      { opacity: 1 - props.contourOpacity / 100 },
     ).addTo(mapInstance)
   }
 }
@@ -320,7 +365,7 @@ watch(() => props.contourOverlayBounds, () => { updateContourOverlay() }, { deep
 
 // 透明度变化只更新现有层
 watch(() => props.contourOpacity, (val) => {
-  if (contourOverlay) contourOverlay.setOpacity(val / 100)
+  if (contourOverlay) contourOverlay.setOpacity(1 - val / 100)
 })
 
 // 暴露方法供父组件调用 (热力图/路径叠加)
@@ -382,5 +427,45 @@ defineExpose({
   color: #fff;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* 搜索定位 */
+.map-search-bar {
+  position: absolute;
+  top: 10px;
+  left: 50px;
+  z-index: 1000;
+  display: flex;
+  gap: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.search-input {
+  width: 240px;
+  padding: 0.45rem 0.7rem;
+  border: none;
+  font-size: 0.82rem;
+  outline: none;
+  background: white;
+  color: #374151;
+}
+
+.search-input::placeholder {
+  color: #9ca3af;
+}
+
+.search-btn {
+  padding: 0.45rem 0.7rem;
+  border: none;
+  background: #4a6cf7;
+  color: white;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.search-btn:hover {
+  background: #3b5fe0;
 }
 </style>

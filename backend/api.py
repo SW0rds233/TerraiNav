@@ -1389,6 +1389,33 @@ def map_overlay():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/geocode", methods=["GET"])
+def geocode():
+    """地名地理编码代理 (Open-Meteo Geocoding API, 免费无 key)"""
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"success": False, "error": "缺少查询参数 q"}), 400
+
+    url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(q)}&count=3&language=zh"
+    req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        items = data.get("results", []) if isinstance(data, dict) else []
+        results = [
+            {
+                "lat": float(r["latitude"]),
+                "lon": float(r["longitude"]),
+                "display_name": f"{r.get('name', q)}, {r.get('admin1', '')}, {r.get('country', '')}",
+            }
+            for r in items
+        ]
+        return jsonify({"success": True, "results": results})
+    except Exception as e:
+        logging.error(f"地理编码失败: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/tile/<source>/<int:z>/<int:x>/<int:y>.png", methods=["GET"])
 def serve_tile(source, z, x, y):
     """统一瓦片服务: esri=代理卫星图, demcontour=本地生成等高线"""

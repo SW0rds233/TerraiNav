@@ -30,7 +30,7 @@
       </button>
       <div v-if="contourEnabled" class="opacity-control">
         <label>叠加透明度:</label>
-        <input type="range" :value="contourOpacity" @input="onOpacityChange" min="10" max="100" class="opacity-slider" />
+        <input type="range" :value="contourOpacity" @input="onOpacityChange" min="0" max="100" class="opacity-slider" />
         <span>{{ contourOpacity }}%</span>
       </div>
     </div>
