@@ -35,6 +35,21 @@
       </div>
     </div>
 
+    <!-- 结果叠加控制 (分析完成后显示) -->
+    <div v-if="hasResult" class="overlay-result-controls">
+      <h4>分析结果叠加</h4>
+      <div class="opacity-control">
+        <label>热力图透明度:</label>
+        <input type="range" :value="heatmapOpacity" @input="onHeatmapOpacityChange" min="0" max="100" class="opacity-slider" />
+        <span>{{ heatmapOpacity }}%</span>
+      </div>
+      <div class="opacity-control">
+        <label>路径图透明度:</label>
+        <input type="range" :value="pathOpacity" @input="onPathOpacityChange" min="0" max="100" class="opacity-slider" />
+        <span>{{ pathOpacity }}%</span>
+      </div>
+    </div>
+
     <!-- API配置 -->
     <div class="api-config">
       <h3>API配置</h3>
@@ -134,6 +149,9 @@ const props = defineProps<{
   contourEnabled: boolean
   canContour: boolean
   contourOpacity: number
+  hasResult: boolean
+  heatmapOpacity: number
+  pathOpacity: number
 }>()
 
 const emit = defineEmits<{
@@ -144,6 +162,8 @@ const emit = defineEmits<{
   'update:gridBlocks': [value: string]
   'update:outputOptions': [value: { heatmap: boolean; path: boolean; quality: string }]
   'update:contourOpacity': [value: number]
+  'update:heatmapOpacity': [value: number]
+  'update:pathOpacity': [value: number]
   'test-api': []
   'start-analysis': []
   'toggle-contour': []
@@ -159,7 +179,15 @@ function onApiKeyChange(e: Event) { emit('update:apiKey', (e.target as HTMLInput
 function onTaskNameChange(e: Event) { emit('update:taskName', (e.target as HTMLInputElement).value) }
 function onStartPointChange(e: Event) { emit('update:startPoint', (e.target as HTMLInputElement).value) }
 function onGridBlocksChange(e: Event) { emit('update:gridBlocks', (e.target as HTMLInputElement).value) }
-function onOpacityChange(e: Event) { emit('update:contourOpacity', parseInt((e.target as HTMLInputElement).value)) }
+function onOpacityChange(e: Event) {
+  emit('update:contourOpacity', parseInt((e.target as HTMLInputElement).value))
+}
+function onHeatmapOpacityChange(e: Event) {
+  emit('update:heatmapOpacity', parseInt((e.target as HTMLInputElement).value))
+}
+function onPathOpacityChange(e: Event) {
+  emit('update:pathOpacity', parseInt((e.target as HTMLInputElement).value))
+}
 </script>
 
 <style scoped>
@@ -191,6 +219,13 @@ function onOpacityChange(e: Event) { emit('update:contourOpacity', parseInt((e.t
 .contour-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .opacity-control { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; font-size: 0.78rem; color: #64748b; }
 .opacity-slider { flex: 1; accent-color: #4f46e5; height: 4px; }
+
+/* 结果叠加 */
+.overlay-result-controls {
+  margin-bottom: 1.25rem; padding: 0.75rem; background: #f0fdf4;
+  border: 1px solid #bbf7d0; border-radius: 8px;
+}
+.overlay-result-controls h4 { font-size: 0.82rem; color: #166534; margin-bottom: 0.5rem; font-weight: 600; }
 
 /* API配置 */
 .api-config { margin-bottom: 1.25rem; }

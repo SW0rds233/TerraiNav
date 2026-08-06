@@ -55,6 +55,12 @@ const props = withDefaults(
     contourOverlayUrl?: string | null
     contourOverlayBounds?: { north: number; south: number; east: number; west: number } | null
     contourOpacity?: number
+    heatmapOverlayUrl?: string | null
+    heatmapOverlayBounds?: { north: number; south: number; east: number; west: number } | null
+    heatmapOpacity?: number
+    pathOverlayUrl?: string | null
+    pathOverlayBounds?: { north: number; south: number; east: number; west: number } | null
+    pathOpacity?: number
   }>(),
   {
     startPoint: '1,1',
@@ -66,6 +72,12 @@ const props = withDefaults(
     contourOverlayUrl: null,
     contourOverlayBounds: null,
     contourOpacity: 50,
+    heatmapOverlayUrl: null,
+    heatmapOverlayBounds: null,
+    heatmapOpacity: 60,
+    pathOverlayUrl: null,
+    pathOverlayBounds: null,
+    pathOpacity: 60,
   },
 )
 
@@ -91,6 +103,8 @@ let mapInstance: L.Map | null = null
 let tileLayer: L.TileLayer | null = null
 let gridLayer: L.LayerGroup | null = null
 let contourOverlay: L.ImageOverlay | null = null
+let heatmapOverlay: L.ImageOverlay | null = null
+let pathOverlay: L.ImageOverlay | null = null
 const startBlock = ref<number | null>(null)
 const searchText = ref('')
 
@@ -121,10 +135,12 @@ async function doSearch() {
       mapInstance.setView([r.lat, r.lon], 14)
       searchText.value = r.display_name.split(',')[0] ?? q
     } else {
-      alert(`未找到地点: ${q}`)
+      const hint = json.error || '搜索失败'
+      const msg = hint.includes('经纬度') ? hint : `${hint}。请尝试直接输入经纬度，如 39.9,116.4`
+      alert(msg)
     }
   } catch {
-    alert('搜索失败，请检查网络后重试')
+    alert('搜索失败，请检查网络后重试。\n或直接输入经纬度，如 39.9,116.4')
   }
 }
 
@@ -366,6 +382,44 @@ watch(() => props.contourOverlayBounds, () => { updateContourOverlay() }, { deep
 // 透明度变化只更新现有层
 watch(() => props.contourOpacity, (val) => {
   if (contourOverlay) contourOverlay.setOpacity(1 - val / 100)
+})
+
+// ========== 热力图叠加层 ==========
+function updateHeatmapOverlay() {
+  if (!mapInstance) return
+  if (heatmapOverlay) { mapInstance.removeLayer(heatmapOverlay); heatmapOverlay = null }
+  if (props.heatmapOverlayUrl && props.heatmapOverlayBounds) {
+    const b = props.heatmapOverlayBounds
+    heatmapOverlay = L.imageOverlay(
+      props.heatmapOverlayUrl,
+      [[b.south, b.west], [b.north, b.east]],
+      { opacity: 1 - props.heatmapOpacity / 100 },
+    ).addTo(mapInstance)
+  }
+}
+watch(() => props.heatmapOverlayUrl, () => { updateHeatmapOverlay() })
+watch(() => props.heatmapOverlayBounds, () => { updateHeatmapOverlay() }, { deep: true })
+watch(() => props.heatmapOpacity, (val) => {
+  if (heatmapOverlay) heatmapOverlay.setOpacity(1 - val / 100)
+})
+
+// ========== 路径图叠加层 ==========
+function updatePathOverlay() {
+  if (!mapInstance) return
+  if (pathOverlay) { mapInstance.removeLayer(pathOverlay); pathOverlay = null }
+  if (props.pathOverlayUrl && props.pathOverlayBounds) {
+    const b = props.pathOverlayBounds
+    pathOverlay = L.imageOverlay(
+      props.pathOverlayUrl,
+      [[b.south, b.west], [b.north, b.east]],
+      { opacity: 1 - props.pathOpacity / 100 },
+    ).addTo(mapInstance)
+  }
+}
+watch(() => props.pathOverlayUrl, () => { updatePathOverlay() })
+watch(() => props.pathOverlayBounds, () => { updatePathOverlay() }, { deep: true })
+watch(() => props.pathOpacity, (val) => {
+  if (pathOverlay) pathOverlay.setOpacity(1 - val / 100)
 })
 
 // 暴露方法供父组件调用 (热力图/路径叠加)

@@ -21,6 +21,9 @@
           :contour-enabled="contourEnabled"
           :can-contour="canContour"
           :contour-opacity="contourOpacity"
+          :has-result="analysisResult.stats !== null"
+          :heatmap-opacity="heatmapOpacity"
+          :path-opacity="pathOpacity"
           @update:tile-source="onTileSourceChange"
           @update:api-key="onApiKeyChange"
           @update:task-name="onTaskNameChange"
@@ -28,6 +31,8 @@
           @update:grid-blocks="onGridBlocksChange"
           @update:output-options="onOutputOptionsChange"
           @update:contour-opacity="(v: number) => contourOpacity = v"
+          @update:heatmap-opacity="(v: number) => heatmapOpacity = v"
+          @update:path-opacity="(v: number) => pathOpacity = v"
           @test-api="testApiKey"
           @start-analysis="startAnalysis"
           @toggle-contour="onToggleContour"
@@ -66,6 +71,12 @@
             :contour-overlay-url="contourOverlayUrl"
             :contour-overlay-bounds="contourOverlayBounds"
             :contour-opacity="contourOpacity"
+            :heatmap-overlay-url="heatmapOverlayUrl"
+            :heatmap-overlay-bounds="resultOverlayBounds"
+            :heatmap-opacity="heatmapOpacity"
+            :path-overlay-url="pathOverlayUrl"
+            :path-overlay-bounds="resultOverlayBounds"
+            :path-opacity="pathOpacity"
             @update:bounds="onMapBoundsChange"
             @update:scale="onMapScaleUpdate"
             @select-block="onMapBlockSelect"
@@ -150,6 +161,13 @@ const contourEnabled = ref(false)
 const contourOverlayUrl = ref<string | null>(null)
 const contourOverlayBounds = ref<{ north: number; south: number; east: number; west: number } | null>(null)
 const contourOpacity = ref(50)
+
+// 热力图 / 路径图叠加 (分析完成后显示在地图上)
+const heatmapOverlayUrl = ref<string | null>(null)
+const pathOverlayUrl = ref<string | null>(null)
+const resultOverlayBounds = ref<{ north: number; south: number; east: number; west: number } | null>(null)
+const heatmapOpacity = ref(60)
+const pathOpacity = ref(60)
 
 const analysisResult = ref<AnalysisResult>({ heatmap: '', path: '', stats: null, threatPoints: [], threatStats: null })
 const analysisProgress = ref<AnalysisProgress>({ status: 'idle', message: '准备分析', progress_percent: 0 })
@@ -309,6 +327,11 @@ const startAnalysis = async () => {
       },
       _rawData: result,
     }
+
+    // 热力图 / 路径图叠加到地图上
+    resultOverlayBounds.value = mapBounds.value ? { ...mapBounds.value } : null
+    heatmapOverlayUrl.value = result.heatmap_url ? `${API_BASE_URL}${result.heatmap_url}` : null
+    pathOverlayUrl.value = result.pathmap_url ? `${API_BASE_URL}${result.pathmap_url}` : null
 
     localStorage.setItem('terrainav_api_key', apiKey.value)
 

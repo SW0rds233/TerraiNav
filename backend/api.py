@@ -29,6 +29,12 @@ import time
 import secrets
 import math
 import urllib.request
+import ssl
+
+# 外网 API 调用统一使用的 SSL 上下文 (Open-Meteo 子域名证书兼容)
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 # 导入业务模块
 from agent import TerrainAnalyzer
@@ -261,19 +267,70 @@ def get_task_record(task_id):
         return TASKS.get(task_id)
 
 
-def _run_terrain_analysis(analyzer_local, assessor_local, planner_local, image_path, rows, cols, progress_callback=None):
-    """【优化】共享的AI分析→威胁评估→关键点检测管道，消除get_heatmap与build_threat_result的重复代码"""
+def _inject_real_elevation(terrain_data, bounds, rows, cols):
+    """混合方案: 用真实DEM高程覆盖AI猜测的高程值
+
+    Args:
+        terrain_data: AI返回的地形要素列表 (含ID, 高程, 坡度, 类型等)
+        bounds: {"north", "south", "east", "west"} 区域经纬度边界
+        rows, cols: 网格行/列数
+
+    Returns:
+        修改后的terrain_data (原地修改)
+    """
+    north = bounds["north"]
+    south = bounds["south"]
+    east = bounds["east"]
+    west = bounds["west"]
+
+    # 每格中心经纬度
+    points = []
+    for r in range(rows):
+        for c in range(cols):
+            lat = north - (r + 0.5) * (north - south) / rows
+            lon = west + (c + 0.5) * (east - west) / cols
+            points.append((lat, lon))
+
+    logging.info(f"[DEM注入] 获取 {len(points)} 个格心的真实高程...")
+    elevs = _fetch_elevations(points)
+    if elevs is None or len(elevs) != len(points):
+        logging.warning("[DEM注入] 高程获取失败, 保持AI判读值")
+        return terrain_data
+
+    # 构建块ID → 真实高程映射
+    elev_by_block = {}
+    for r in range(rows):
+        for c in range(cols):
+            bid = r * cols + c + 1
+            elev_by_block[bid] = elevs[r * cols + c]
+
+    # 覆盖 terrain_data 中的高程字段
+    for item in terrain_data:
+        bid = item.get("ID")
+        if bid is not None and bid in elev_by_block:
+            item["高程"] = f"{elev_by_block[bid]:.0f}m"
+
+    real_range = f"{min(elevs):.0f}~{max(elevs):.0f}m"
+    logging.info(f"[DEM注入] 已替换 {len(elev_by_block)} 个块的高程为真实DEM数据 (范围 {real_range})")
+    return terrain_data
+
+
+def _run_terrain_analysis(analyzer_local, assessor_local, planner_local, image_path, rows, cols, progress_callback=None, bounds=None):
+    """AI分析→(可选DEM注入)→威胁评估→关键点检测管道"""
     terrain_data = analyzer_local.analyze_terrain(
         image_path=image_path, rows=rows, cols=cols, max_workers=2,
         progress_callback=progress_callback,
     )
+    # 【混合方案】用真实DEM高程覆盖AI猜测值
+    if bounds:
+        terrain_data = _inject_real_elevation(terrain_data, bounds, rows, cols)
     df, unique_x, unique_y = assessor_local.assess_terrain(terrain_data)
     threat_matrix = assessor_local.build_threat_matrix(df, unique_x, unique_y)
     keypoints = planner_local.detect_keypoints(threat_matrix)
     return terrain_data, df, unique_x, unique_y, threat_matrix, keypoints
 
 
-def build_threat_result(task_id, filename, img_width, img_height, rows, cols, start_point):
+def build_threat_result(task_id, filename, img_width, img_height, rows, cols, start_point, bounds=None):
     """重用现有威胁数据处理逻辑，返回结果字典。"""
     task = get_task_record(task_id)
     if not task:
@@ -298,10 +355,10 @@ def build_threat_result(task_id, filename, img_width, img_height, rows, cols, st
             progress_percent=min(percent, AI_PHASE_WEIGHT),
         )
 
-    # 【优化】使用共享管道函数
     _, df, _, _, threat_matrix, keypoints = _run_terrain_analysis(
         analyzer_local, assessor_local, planner_local, filename, rows, cols,
         progress_callback=inline_progress_callback,
+        bounds=bounds,
     )
 
     logging.info(f"AI分析完成，识别到 {len(df)} 个地形要素")
@@ -395,17 +452,13 @@ def process_threat_task(task_id):
     rows = payload["rows"]
     cols = payload["cols"]
     start_point = payload["start_point"]
+    bounds = payload.get("bounds")
 
     update_task_record(task_id, status="running", progress="任务执行中", progress_percent=1)
     try:
         result = build_threat_result(
-            task_id,
-            image_path,
-            img_width,
-            img_height,
-            rows,
-            cols,
-            start_point,
+            task_id, image_path, img_width, img_height, rows, cols, start_point,
+            bounds=bounds,
         )
         update_task_record(task_id, status="completed", progress="完成", progress_percent=100, result=result)
     except Exception as e:
@@ -1080,7 +1133,7 @@ def _fetch_elevations(points):
         url = f"https://api.open-meteo.com/v1/elevation?latitude={lats}&longitude={lons}"
         req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=30, context=_SSL_CTX) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             results.extend(data.get("elevation", []))
         except Exception as e:
@@ -1161,7 +1214,7 @@ def _stitch_map_tiles(north, south, east, west, zoom, tile_source):
             url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom}/{y_top + r}/{x_min + c}"
             req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=30, context=_SSL_CTX) as resp:
                     data = resp.read()
                 tile = Image.open(io.BytesIO(data)).convert("RGB")
                 canvas.paste(tile, (c * TILE_SIZE, r * TILE_SIZE))
@@ -1224,6 +1277,7 @@ def analyze_map_region():
             "rows": rows,
             "cols": cols,
             "start_point": start_point,
+            "bounds": {"north": north, "south": south, "east": east, "west": west},
         }
         task_id, _ = create_task_record("analyze_map_region", payload)
         worker = threading.Thread(target=process_threat_task, args=(task_id,), daemon=True)
@@ -1391,29 +1445,50 @@ def map_overlay():
 
 @app.route("/api/geocode", methods=["GET"])
 def geocode():
-    """地名地理编码代理 (Open-Meteo Geocoding API, 免费无 key)"""
+    """地名地理编码 - 多源回退 (Open-Meteo → Photon), 均失败时返回明确错误"""
     q = request.args.get("q", "").strip()
     if not q:
         return jsonify({"success": False, "error": "缺少查询参数 q"}), 400
 
-    url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(q)}&count=3&language=zh"
-    req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        items = data.get("results", []) if isinstance(data, dict) else []
-        results = [
-            {
-                "lat": float(r["latitude"]),
-                "lon": float(r["longitude"]),
-                "display_name": f"{r.get('name', q)}, {r.get('admin1', '')}, {r.get('country', '')}",
-            }
-            for r in items
-        ]
-        return jsonify({"success": True, "results": results})
-    except Exception as e:
-        logging.error(f"地理编码失败: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    backends = [
+        ("Open-Meteo", f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(q)}&count=3&language=en"),
+        ("Photon", f"https://photon.komoot.io/api/?q={urllib.parse.quote(q)}&limit=3"),
+    ]
+
+    last_error = ""
+    for name, url in backends:
+        req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=8, context=_SSL_CTX) as resp:
+                raw = resp.read()
+            if not raw or raw[:1] == b"<":
+                last_error = f"{name} 返回无效响应"
+                continue
+            data = json.loads(raw.decode("utf-8"))
+
+            results = []
+            if isinstance(data, list):  # Nominatim-style
+                for r in data[:3]:
+                    results.append({"lat": float(r["lat"]), "lon": float(r["lon"]),
+                                    "display_name": r.get("display_name", q)})
+            elif isinstance(data, dict) and "results" in data:  # Open-Meteo
+                for r in data["results"][:3]:
+                    results.append({"lat": float(r["latitude"]), "lon": float(r["longitude"]),
+                                    "display_name": f"{r.get('name', q)}, {r.get('country', '')}"})
+            elif isinstance(data, dict) and "features" in data:  # Photon/GeoJSON
+                for f in data["features"][:3]:
+                    c = f["geometry"]["coordinates"]
+                    p = f.get("properties", {})
+                    results.append({"lat": c[1], "lon": c[0],
+                                    "display_name": f"{p.get('name', q)}, {p.get('country', '')}"})
+            if results:
+                return jsonify({"success": True, "results": results})
+            last_error = f"{name} 未找到结果"
+        except Exception as e:
+            last_error = f"{name}: {e}"
+            continue
+
+    return jsonify({"success": False, "error": f"地理编码失败 ({last_error})。请直接输入经纬度，如 39.9,116.4"}), 200
 
 
 @app.route("/api/tile/<source>/<int:z>/<int:x>/<int:y>.png", methods=["GET"])
@@ -1435,7 +1510,7 @@ def serve_tile(source, z, x, y):
         url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
         req = urllib.request.Request(url, headers={"User-Agent": "TerraiNav/1.0"})
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX) as resp:
                 png_data = resp.read()
         except Exception as e:
             logging.warning(f"瓦片代理失败 ({z}/{x}/{y}): {e}")
