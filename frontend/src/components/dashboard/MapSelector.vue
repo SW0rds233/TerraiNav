@@ -30,7 +30,7 @@
       </div>
       <div class="status-item" v-if="startBlock">
         <span class="status-label">起点</span>
-        <span class="status-value">块 #{{ startBlock }}</span>
+        <span class="status-value">{{ startLabel }}</span>
       </div>
     </div>
   </div>
@@ -63,7 +63,7 @@ const props = withDefaults(
     pathOpacity?: number
   }>(),
   {
-    startPoint: '1,1',
+    startPoint: '0,0',
     editable: true,
     centerLat: 30.273,
     centerLng: 120.132,
@@ -85,7 +85,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   'update:bounds': [bounds: MapBounds]
   'update:scale': [scale: number]
-  'selectBlock': [blockId: number, lat: number, lng: number]
+  'selectBlock': [blockId: number, lat: number, lng: number, row: number, col: number]
 }>()
 
 // ========== Types ==========
@@ -106,6 +106,12 @@ let contourOverlay: L.ImageOverlay | null = null
 let heatmapOverlay: L.ImageOverlay | null = null
 let pathOverlay: L.ImageOverlay | null = null
 const startBlock = ref<number | null>(null)
+const startLabel = computed(() => {
+  if (startBlock.value === null) return ''
+  const id = startBlock.value - 1
+  const cols = props.gridCols || 1
+  return `${Math.floor(id / cols)},${id % cols}`
+})
 const searchText = ref('')
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
@@ -239,10 +245,10 @@ function updateGrid() {
         html: `<div style="
           background:${isStart ? '#4a6cf7' : 'rgba(0,0,0,0.75)'};
           color:${isStart ? '#fff' : '#ff0'};
-          padding:2px 6px; font-size:11px; border-radius:3px;
-          font-weight:bold; white-space:nowrap;
+          padding:2px 5px; font-size:10px; border-radius:3px;
+          font-weight:bold; white-space:nowrap; font-family:monospace;
           border:${isStart ? '2px solid #fff' : '1px solid rgba(255,255,255,0.3)'};
-        ">#${id}</div>`,
+        ">${r},${c}</div>`,
         className: '',
       })
 
@@ -252,7 +258,7 @@ function updateGrid() {
         marker.on('click', () => {
           startBlock.value = id
           updateGrid()
-          emit('selectBlock', id, centerLat, centerLng)
+          emit('selectBlock', id, centerLat, centerLng, r, c)
         })
       }
     }
@@ -278,10 +284,10 @@ function emitBounds() {
 
 // ========== 块选择 ==========
 function parseStartPoint(sp: string): { r: number; c: number } | null {
+  // 格式: row,col (0-based, 如 0,0 = 左上角)
   const parts = sp.split(',').map((s) => parseInt(s.trim()))
   if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) return null
-  // startPoint格式: col,row (x从1开始, y从1开始)
-  return { c: parts[0] - 1, r: parts[1] - 1 }
+  return { r: parts[0], c: parts[1] }
 }
 
 // ========== 生命周期 ==========

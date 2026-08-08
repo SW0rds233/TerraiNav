@@ -11,7 +11,7 @@
         <div class="settings-section">
           <h3>API设置</h3>
           <div class="setting-item">
-            <label for="api-key">阿里云百炼API密钥</label>
+            <label for="api-key">AI模型API密钥</label>
             <input
               id="api-key"
               v-model="apiKey"
@@ -19,7 +19,7 @@
               placeholder="请输入您的API密钥"
               class="setting-input"
             />
-            <p class="setting-hint">用于访问阿里云百炼AI服务，请妥善保管</p>
+            <p class="setting-hint">支持阿里云百炼、DeepSeek、Moonshot(Kimi)等OpenAI兼容API</p>
             <button class="btn" @click="saveApiKey">保存API密钥</button>
           </div>
         </div>
@@ -106,7 +106,7 @@
           <h3>系统信息</h3>
           <div class="setting-item">
             <label>系统版本</label>
-            <div class="system-info">v1.2.0</div>
+              <div class="system-info">v2.0.0</div>
           </div>
 
           <div class="setting-item">

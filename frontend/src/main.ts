@@ -11,7 +11,7 @@ import './assets/styles/main.css'
 // 获取环境变量（使用 Vite 的方式）
 const isDevelopment = import.meta.env.DEV
 const isProduction = import.meta.env.PROD
-const appVersion = import.meta.env.VITE_APP_VERSION || '1.0.0'
+const appVersion = import.meta.env.VITE_APP_VERSION || '2.0.0'
 
 // 创建应用实例
 const app = createApp(App)

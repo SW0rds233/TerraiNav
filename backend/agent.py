@@ -35,24 +35,26 @@ class TerrainAnalyzer:
         api_key: str,
         max_workers: int = 8,
         model: str = None,
+        base_url: str = None,
     ):
         """初始化
 
         Args:
-            api_key: 阿里云百炼API密钥
+            api_key: API密钥
             max_workers: 最大并行数（默认8个线程）
             model: 模型名称，默认qwen3.6-plus
+            base_url: API端点URL，默认阿里云百炼
         """
         self.api_key = api_key
         self.max_workers = max_workers
         self.model = model or self.DEFAULT_MODEL
+        self.base_url = base_url or self.DASHSCOPE_BASE_URL
 
-        # 【优化】复用 OpenAI client，避免每次 API 调用都创建新实例
         try:
             from openai import OpenAI
             self._client = OpenAI(
                 api_key=self.api_key,
-                base_url=self.DASHSCOPE_BASE_URL,
+                base_url=self.base_url,
             )
         except ImportError:
             raise ImportError("需要安装openai库: pip install openai")
@@ -62,6 +64,7 @@ class TerrainAnalyzer:
         api_key: str,
         model: Optional[str] = None,
         max_workers: int = 8,
+        base_url: Optional[str] = None,
     ) -> "TerrainAnalyzer":
         """工厂方法：创建分析器
 
@@ -69,6 +72,7 @@ class TerrainAnalyzer:
             api_key: API密钥
             model: 模型名称（可选）
             max_workers: 最大并行数
+            base_url: API端点URL（可选，默认阿里云百炼）
 
         Returns:
             TerrainAnalyzer实例
@@ -77,6 +81,7 @@ class TerrainAnalyzer:
             api_key=api_key,
             max_workers=max_workers,
             model=model or TerrainAnalyzer.DEFAULT_MODEL,
+            base_url=base_url,
         )
 
     @staticmethod
@@ -156,10 +161,6 @@ class TerrainAnalyzer:
                     ],
                 },
             ],
-            temperature=0.1,
-            extra_body={
-                "enable_thinking": False,
-            },
         )
 
         content = completion.choices[0].message.content.strip()

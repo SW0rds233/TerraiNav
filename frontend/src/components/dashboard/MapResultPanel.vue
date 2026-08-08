@@ -52,9 +52,22 @@
           <tr v-for="point in threatPoints" :key="point.id" :class="getRowClass(point.threatScore)">
             <td class="rank-cell"><span class="rank-badge" :class="getThreatColorClass(point.threatScore)">{{ point.rank }}</span></td>
             <td class="block-cell"><span class="block-badge">{{ point.block }}</span></td>
-            <td class="threat-score-cell"><span class="threat-score" :class="getThreatColorClass(point.threatScore)">{{ point.threatScore.toFixed(1) }}</span></td>
+            <td class="threat-score-cell">
+              <div class="score-bar-wrap">
+                <div class="score-bar" :style="scoreBarStyle(point.threatScore)">
+                  <div class="score-bar-fill" :class="getThreatColorClass(point.threatScore)" :style="{ width: Math.min(point.threatScore, 100) + '%' }"></div>
+                </div>
+                <span class="score-number" :class="getThreatColorClass(point.threatScore)">{{ point.threatScore.toFixed(1) }}</span>
+              </div>
+            </td>
             <td class="coordinate-cell"><span class="coordinate">{{ point.coordinate }}</span></td>
-            <td class="reason-cell"><div class="reason-text">{{ point.reason }}</div></td>
+            <td class="reason-cell">
+              <div class="reason-wrap" @click="toggleReason(point.id)">
+                <span v-if="!expandedReasons.has(point.id)" class="reason-preview">{{ point.reason.slice(0, 40) }}{{ point.reason.length > 40 ? '...' : '' }}</span>
+                <span v-else class="reason-full">{{ point.reason }}</span>
+                <span v-if="point.reason.length > 40" class="reason-toggle">{{ expandedReasons.has(point.id) ? '收起' : '展开' }}</span>
+              </div>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -69,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 
 interface ThreatPoint {
   id: number
@@ -101,6 +114,16 @@ defineEmits<{
 }>()
 
 const hasResult = computed(() => props.stats !== null)
+const expandedReasons = reactive(new Set<number>())
+
+function toggleReason(id: number) {
+  if (expandedReasons.has(id)) expandedReasons.delete(id)
+  else expandedReasons.add(id)
+}
+
+function scoreBarStyle(_score: number) {
+  return {} // CSS handles the bar via child element width
+}
 
 function getThreatColorClass(score: number) {
   if (score >= 75) return 'score-red'
@@ -157,11 +180,32 @@ table { width: 100%; border-collapse: collapse; }
 th { text-align: left; padding: 0.4rem 0.5rem; font-size: 0.72rem; color: #64748b; border-bottom: 2px solid #e5e7eb; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em; }
 td { padding: 0.35rem 0.5rem; font-size: 0.8rem; border-bottom: 1px solid #f1f5f9; }
 .rank-badge { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; font-size: 0.7rem; font-weight: 600; color: white; }
-.score-red { background: #ef4444; }
-.score-yellow { background: #f59e0b; }
-.score-green { background: #10b981; }
-.score-default { background: #94a3b8; }
+.rank-badge.score-red { background: #ef4444; }
+.rank-badge.score-yellow { background: #f59e0b; }
+.rank-badge.score-green { background: #10b981; }
+.rank-badge.score-default { background: #94a3b8; }
 .block-badge { padding: 0.15rem 0.4rem; background: #eff6ff; color: #2563eb; border-radius: 4px; font-size: 0.72rem; font-weight: 500; }
+
+/* 威胁分数进度条 */
+.score-bar-wrap { display: flex; align-items: center; gap: 0.4rem; min-width: 100px; }
+.score-bar { flex: 1; height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
+.score-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.score-bar-fill.score-red { background: #ef4444; }
+.score-bar-fill.score-yellow { background: #f59e0b; }
+.score-bar-fill.score-green { background: #10b981; }
+.score-bar-fill.score-default { background: #94a3b8; }
+.score-number { font-weight: 700; font-size: 0.85rem; min-width: 40px; text-align: right; }
+.score-number.score-red { color: #ef4444; }
+.score-number.score-yellow { color: #d97706; }
+.score-number.score-green { color: #059669; }
+.score-number.score-default { color: #64748b; }
+
+/* 原因展开 */
+.reason-wrap { cursor: pointer; font-size: 0.78rem; color: #475569; line-height: 1.4; }
+.reason-preview { color: #475569; }
+.reason-full { color: #1e293b; display: block; white-space: pre-wrap; word-break: break-all; }
+.reason-toggle { color: #4a6cf7; font-weight: 500; font-size: 0.72rem; margin-left: 0.3rem; white-space: nowrap; }
+.reason-toggle:hover { text-decoration: underline; }
 .threat-score { font-weight: 600; }
 .coordinate { font-size: 0.75rem; color: #64748b; }
 .reason-text { font-size: 0.75rem; color: #475569; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

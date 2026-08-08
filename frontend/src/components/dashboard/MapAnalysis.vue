@@ -6,6 +6,11 @@
         <MapControls
           :tile-source="tileSource"
           :api-key="apiKey"
+          :api-provider="apiProvider"
+          :api-base-url="apiBaseUrl"
+          :api-model="apiModel"
+          :api-model-custom="apiModelCustom"
+          :api-max-workers="apiMaxWorkers"
           :task-name="taskName"
           :start-point="droneParams.startPoint"
           :grid-blocks="droneParams.gridBlocks"
@@ -26,6 +31,11 @@
           :path-opacity="pathOpacity"
           @update:tile-source="onTileSourceChange"
           @update:api-key="onApiKeyChange"
+          @update:api-provider="(v: string) => apiProvider = v"
+          @update:api-base-url="(v: string) => apiBaseUrl = v"
+          @update:api-model="(v: string) => apiModel = v"
+          @update:api-model-custom="(v: string) => apiModelCustom = v"
+          @update:api-max-workers="(v: number) => apiMaxWorkers = v"
           @update:task-name="onTaskNameChange"
           @update:start-point="onStartPointChange"
           @update:grid-blocks="onGridBlocksChange"
@@ -64,8 +74,8 @@
         <div class="map-panel">
           <MapSelector
             ref="mapSelectorRef"
-            :grid-rows="parsedGridBlocks.m || parsedGridBlocks.n"
-            :grid-cols="parsedGridBlocks.m || parsedGridBlocks.n"
+            :grid-rows="parsedGridBlocks.m"
+            :grid-cols="parsedGridBlocks.n"
             :start-point="droneParams.startPoint"
             :tile-source="tileSource"
             :contour-overlay-url="contourOverlayUrl"
@@ -137,6 +147,8 @@ const apiClient = axios.create({ baseURL: API_BASE_URL, timeout: 480000 })
 apiClient.interceptors.request.use((config) => {
   const k = localStorage.getItem('terrainav_api_key')
   if (k) config.headers['X-API-Key'] = k
+  const session = localStorage.getItem('terrainav_session_token')
+  if (session) config.headers['X-Session-Token'] = session
   return config
 }, (e) => Promise.reject(e))
 apiClient.interceptors.response.use((r) => r, (error) => {
@@ -150,9 +162,14 @@ const mapBounds = ref<MapBounds | null>(null)
 const mapScale = ref(0)
 const tileSource = ref('esri')
 const apiKey = ref('')
+const apiProvider = ref('dashscope')
+const apiBaseUrl = ref('')
+const apiModel = ref('qwen3.6-plus')
+const apiModelCustom = ref('')
+const apiMaxWorkers = ref(4)
 const analyzing = ref(false)
 const taskName = ref('')
-const droneParams = ref({ startPoint: '1,1', gridBlocks: '4 * 4' })
+const droneParams = ref({ startPoint: '0,0', gridBlocks: '4 * 4' })
 const outputOptions = ref({ heatmap: true, path: true, quality: 'high' })
 const recentTasks = ref<RecentTask[]>([])
 
@@ -210,12 +227,8 @@ function onGridBlocksChange(v: string) { droneParams.value.gridBlocks = v }
 function onOutputOptionsChange(v: { heatmap: boolean; path: boolean; quality: string }) { outputOptions.value = { ...v } }
 function onMapBoundsChange(bounds: MapBounds) { mapBounds.value = bounds }
 function onMapScaleUpdate(scale: number) { mapScale.value = scale }
-function onMapBlockSelect(blockId: number) {
-  const { m, n } = parsedGridBlocks.value
-  if (m <= 0 || n <= 0) return
-  const r = Math.floor((blockId - 1) / n)
-  const c = (blockId - 1) % n
-  droneParams.value.startPoint = `${c + 1},${r + 1}`
+function onMapBlockSelect(_blockId: number, _lat: number, _lng: number, row: number, col: number) {
+  droneParams.value.startPoint = `${row},${col}`
 }
 
 const onToggleContour = async () => {
@@ -248,7 +261,14 @@ const onToggleContour = async () => {
 }
 
 // ========== API ==========
-const initApi = async (key: string) => (await apiClient.post('/api/init', { api_key: key })).data
+const initApi = async (key: string) => {
+  const payload: Record<string, any> = { api_key: key }
+  const model = apiModel.value === 'custom-model' ? apiModelCustom.value : apiModel.value
+  if (model) payload.model = model
+  if (apiBaseUrl.value) payload.base_url = apiBaseUrl.value
+  payload.max_workers = apiMaxWorkers.value
+  return (await apiClient.post('/api/init', payload)).data
+}
 
 const waitForTaskResult = async (taskId: string) => {
   const start = Date.now()
@@ -270,13 +290,20 @@ const waitForTaskResult = async (taskId: string) => {
 const testApiKey = async () => {
   if (!apiKey.value) { alert('请输入API密钥'); return }
   try {
-    localStorage.setItem('terrainav_api_key', apiKey.value)
     const r = await initApi(apiKey.value)
-    alert(r.success ? 'API密钥验证通过！' : '验证失败: ' + (r.error || '未知错误'))
-    if (!r.success) localStorage.removeItem('terrainav_api_key')
+    if (r.success) {
+      localStorage.setItem('terrainav_api_key', apiKey.value)
+      localStorage.setItem('terrainav_session_token', r.session_token || '')
+      alert(r.message || '连接成功')
+    } else {
+      localStorage.removeItem('terrainav_api_key')
+      localStorage.removeItem('terrainav_session_token')
+      alert('连接失败: ' + (r.error || '未知错误'))
+    }
   } catch (e: any) {
-    alert('验证失败: ' + e.message)
+    alert('连接失败: ' + e.message)
     localStorage.removeItem('terrainav_api_key')
+    localStorage.removeItem('terrainav_session_token')
   }
 }
 
@@ -401,26 +428,28 @@ onUnmounted(() => {})
 </script>
 
 <style scoped>
-.dashboard { height: 100%; display: flex; flex-direction: column; background: #f8fafc; min-height: 100vh; }
-.dashboard-content { display: flex; flex: 1; gap: 1.25rem; padding: 0 1.25rem 1.25rem; max-width: 1600px; margin: 0 auto; width: 100%; overflow: auto; }
-.left-panel { width: 320px; display: flex; flex-direction: column; gap: 0.75rem; flex-shrink: 0; }
+.dashboard { height: 100%; display: flex; flex-direction: column; background: #f1f5f9; min-height: 100vh; }
+.dashboard-content { display: flex; flex: 1; gap: 1rem; padding: 0 1rem 1rem; max-width: 1600px; margin: 0 auto; width: 100%; overflow: auto; }
+.left-panel { width: 320px; display: flex; flex-direction: column; gap: 0.65rem; flex-shrink: 0; }
 .right-panel { flex: 1; display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; overflow-x: hidden; overflow-y: auto; }
-.map-panel { flex-shrink: 0; aspect-ratio: 1 / 1; width: 100%; border-radius: 10px; overflow: hidden; border: none; background: #000; box-shadow: 0 1px 4px rgba(0,0,0,0.1), 0 2px 10px rgba(0,0,0,0.06); }
+.map-panel { flex-shrink: 0; aspect-ratio: 1 / 1; width: 100%; border-radius: 12px; overflow: hidden; border: none; background: #000; box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.04); transition: box-shadow 0.2s; }
+.map-panel:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12), 0 8px 24px rgba(0,0,0,0.06); }
 
 /* 最近任务 */
-.recent-tasks { background: white; border-radius: 10px; padding: 0.9rem 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04); border: 1px solid #e5e7eb; }
+.recent-tasks { background: white; border-radius: 10px; padding: 0.85rem 1.1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; }
 .tasks-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
-.tasks-header h3 { font-size: 0.85rem; color: #334155; font-weight: 600; }
-.refresh-btn { padding: 0.25rem 0.6rem; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; cursor: pointer; font-size: 0.72rem; color: #475569; }
-.refresh-btn:hover { background: #e2e8f0; }
-.tasks-list { display: flex; flex-direction: column; gap: 0.6rem; }
-.task-item { display: flex; gap: 0.6rem; align-items: center; }
-.task-preview { width: 36px; height: 36px; border-radius: 5px; overflow: hidden; flex-shrink: 0; }
+.tasks-header h3 { font-size: 0.82rem; color: #334155; font-weight: 600; }
+.refresh-btn { padding: 0.2rem 0.5rem; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; cursor: pointer; font-size: 0.7rem; color: #64748b; transition: all 0.15s; }
+.refresh-btn:hover { background: #e2e8f0; color: #334155; }
+.tasks-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.task-item { display: flex; gap: 0.5rem; align-items: center; padding: 0.35rem 0; border-radius: 6px; transition: background 0.15s; }
+.task-item:hover { background: #f8fafc; }
+.task-preview { width: 32px; height: 32px; border-radius: 5px; overflow: hidden; flex-shrink: 0; }
 .task-thumb-placeholder { width: 100%; height: 100%; background: linear-gradient(135deg, #818cf8, #6366f1); border-radius: 5px; }
 .task-info { flex: 1; min-width: 0; }
-.task-name { font-size: 0.78rem; color: #334155; font-weight: 500; }
-.task-time { font-size: 0.68rem; color: #94a3b8; }
-.task-status { font-size: 0.68rem; padding: 0.1rem 0.35rem; border-radius: 3px; display: inline-block; }
+.task-name { font-size: 0.76rem; color: #334155; font-weight: 500; }
+.task-time { font-size: 0.66rem; color: #94a3b8; }
+.task-status { font-size: 0.66rem; padding: 0.1rem 0.3rem; border-radius: 3px; display: inline-block; }
 .task-status.success { background: #dcfce7; color: #166534; }
 .task-status.failed { background: #fee2e2; color: #991b1b; }
 .task-status.pending { background: #fef9c3; color: #854d0e; }

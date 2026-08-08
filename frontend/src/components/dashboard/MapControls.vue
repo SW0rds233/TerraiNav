@@ -53,7 +53,37 @@
     <!-- API配置 -->
     <div class="api-config">
       <h3>API配置</h3>
-      <input :value="apiKey" @input="onApiKeyChange" type="password" placeholder="请输入API密钥" class="api-input" />
+      <div class="api-row">
+        <label>服务商</label>
+        <select :value="apiProvider" @change="onProviderChange" class="api-select">
+          <option value="dashscope">阿里云百炼 (DashScope)</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="moonshot">Moonshot (Kimi)</option>
+          <option value="custom">OpenAI兼容 (自定义)</option>
+        </select>
+      </div>
+      <div class="api-row" v-if="apiProvider === 'custom'">
+        <label>API端点</label>
+        <input :value="apiBaseUrl" @input="onApiBaseUrlChange" type="text" placeholder="https://api.openai.com/v1" class="api-input" />
+      </div>
+      <div class="api-row">
+        <label>模型</label>
+        <select :value="apiModel" @change="onApiModelChange" class="api-select">
+          <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+          <option value="custom-model">自定义模型...</option>
+        </select>
+      </div>
+      <div class="api-row" v-if="apiModel === 'custom-model'">
+        <input :value="apiModelCustom" @input="onApiModelCustomChange" type="text" placeholder="输入模型名称" class="api-input" />
+      </div>
+      <div class="api-row">
+        <label>并发数</label>
+        <input :value="apiMaxWorkers" @input="onApiMaxWorkersChange" type="number" min="1" max="16" class="api-input api-input-narrow" />
+      </div>
+      <div class="api-row">
+        <label>API密钥</label>
+        <input :value="apiKey" @input="onApiKeyChange" type="password" placeholder="sk-..." class="api-input" />
+      </div>
       <button class="api-test-btn" @click="$emit('test-api')">测试连接</button>
     </div>
 
@@ -88,7 +118,7 @@
       <h3>无人机巡逻参数</h3>
       <div class="param-group">
         <label>巡逻起始区块 (x,y)</label>
-        <input type="text" :value="startPoint" @input="onStartPointChange" class="param-input" placeholder="例如: 1,1" />
+        <input type="text" :value="startPoint" @input="onStartPointChange" class="param-input"           placeholder="例如: 0,0" />
       </div>
       <div class="param-group">
         <label>巡逻区块划分 (m×n)</label>
@@ -123,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 
 interface AnalysisProgress {
   status: 'idle' | 'pending' | 'running' | 'completed' | 'failed'
@@ -131,9 +161,24 @@ interface AnalysisProgress {
   progress_percent: number
 }
 
+// 服务商预设
+const PROVIDER_PRESETS: Record<string, { baseUrl: string; models: string[] }> = {
+  dashscope: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen3.6-plus', 'qwen-vl-max', 'qwen-vl-plus'] },
+  deepseek: { baseUrl: 'https://api.deepseek.com', models: ['deepseek-v4-pro', 'deepseek-v4-flash'] },
+  moonshot:  { baseUrl: 'https://api.moonshot.cn/v1',  models: ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6'] },
+  custom:   { baseUrl: '', models: ['gpt-4o', 'gpt-4o-mini', 'claude-3-5-sonnet-20241022'] },
+}
+
+const availableModels = computed(() => PROVIDER_PRESETS[props.apiProvider]?.models ?? [])
+
 const props = defineProps<{
   tileSource: string
   apiKey: string
+  apiProvider: string
+  apiBaseUrl: string
+  apiModel: string
+  apiModelCustom: string
+  apiMaxWorkers: number
   taskName: string
   startPoint: string
   gridBlocks: string
@@ -157,6 +202,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:tileSource': [value: string]
   'update:apiKey': [value: string]
+  'update:apiProvider': [value: string]
+  'update:apiBaseUrl': [value: string]
+  'update:apiModel': [value: string]
+  'update:apiModelCustom': [value: string]
+  'update:apiMaxWorkers': [value: number]
   'update:taskName': [value: string]
   'update:startPoint': [value: string]
   'update:gridBlocks': [value: string]
@@ -176,6 +226,19 @@ watch(() => props.outputOptions, (val) => { localOutputOptions.value = { ...val 
 
 function onTileSourceChange(e: Event) { emit('update:tileSource', (e.target as HTMLSelectElement).value) }
 function onApiKeyChange(e: Event) { emit('update:apiKey', (e.target as HTMLInputElement).value) }
+function onProviderChange(e: Event) {
+  const provider = (e.target as HTMLSelectElement).value
+  emit('update:apiProvider', provider)
+  const preset = PROVIDER_PRESETS[provider]
+  if (preset) {
+    emit('update:apiBaseUrl', preset.baseUrl)
+    if (preset.models.length > 0) emit('update:apiModel', preset.models[0]!)
+  }
+}
+function onApiBaseUrlChange(e: Event) { emit('update:apiBaseUrl', (e.target as HTMLInputElement).value) }
+function onApiModelChange(e: Event) { emit('update:apiModel', (e.target as HTMLSelectElement).value) }
+function onApiModelCustomChange(e: Event) { emit('update:apiModelCustom', (e.target as HTMLInputElement).value) }
+function onApiMaxWorkersChange(e: Event) { emit('update:apiMaxWorkers', parseInt((e.target as HTMLInputElement).value) || 4) }
 function onTaskNameChange(e: Event) { emit('update:taskName', (e.target as HTMLInputElement).value) }
 function onStartPointChange(e: Event) { emit('update:startPoint', (e.target as HTMLInputElement).value) }
 function onGridBlocksChange(e: Event) { emit('update:gridBlocks', (e.target as HTMLInputElement).value) }
@@ -193,11 +256,13 @@ function onPathOpacityChange(e: Event) {
 <style scoped>
 /* 卡片基础 */
 .upload-card {
-  background: white; border-radius: 12px; padding: 1.5rem 1.5rem 1.25rem;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04); border: 1px solid #e5e7eb;
+  background: white; border-radius: 12px; padding: 1.25rem 1.35rem 1.1rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03); border: 1px solid #e2e8f0;
+  transition: box-shadow 0.2s;
 }
-.card-title { font-size: 1.2rem; color: #1a2980; margin-bottom: 0.25rem; font-weight: 700; }
-.card-subtitle { color: #6b7280; font-size: 0.82rem; margin-bottom: 1.25rem; }
+.upload-card:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04); }
+.card-title { font-size: 1.15rem; color: #1e40af; margin-bottom: 0.2rem; font-weight: 700; }
+.card-subtitle { color: #64748b; font-size: 0.8rem; margin-bottom: 1.1rem; }
 
 /* 区域信息 */
 .region-info {
@@ -230,11 +295,16 @@ function onPathOpacityChange(e: Event) {
 /* API配置 */
 .api-config { margin-bottom: 1.25rem; }
 .api-config h3 { font-size: 0.85rem; color: #334155; margin-bottom: 0.5rem; font-weight: 600; }
-.api-input { width: 100%; padding: 0.55rem 0.7rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.82rem; margin-bottom: 0.5rem; transition: border-color 0.15s, box-shadow 0.15s; }
+.api-row { margin-bottom: 0.45rem; }
+.api-row label { display: block; font-size: 0.72rem; color: #64748b; margin-bottom: 0.15rem; font-weight: 500; }
+.api-input { width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.8rem; transition: border-color 0.15s, box-shadow 0.15s; }
 .api-input:focus { outline: none; border-color: #4a6cf7; box-shadow: 0 0 0 3px rgba(74,108,247,0.1); }
 .api-input::placeholder { color: #9ca3af; }
-.api-test-btn { width: 100%; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; padding: 0.45rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; transition: background 0.15s; }
-.api-test-btn:hover { background: #e2e8f0; }
+.api-input-narrow { width: 80px; }
+.api-select { width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.8rem; background: white; transition: border-color 0.15s; }
+.api-select:focus { outline: none; border-color: #4a6cf7; box-shadow: 0 0 0 3px rgba(74,108,247,0.1); }
+.api-test-btn { width: 100%; background: #1e40af; color: white; border: none; padding: 0.45rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500; margin-top: 0.4rem; transition: background 0.15s; }
+.api-test-btn:hover { background: #1e3a8a; }
 
 /* 输出选项 */
 .output-options { margin-bottom: 1.25rem; }

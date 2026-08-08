@@ -10,7 +10,6 @@ TerraiNav Web API - 地形威胁评估与路径规划服务
 """
 
 from flask import Flask, request, jsonify, send_from_directory, url_for
-from flask_cors import CORS
 import os
 import shutil
 import logging
@@ -50,19 +49,6 @@ logging.basicConfig(
 )
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-# CORS配置 - 支持开发和生产环境
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
-CORS(
-    app,
-    resources={r"/api/*": {"origins": ALLOWED_ORIGINS.split(",") if ALLOWED_ORIGINS != "*" else "*"}},
-    supports_credentials=False,
-    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
-    expose_headers=["Content-Type", "X-API-Key", "Authorization"],
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-)
-
-app.config["CORS_HEADERS"] = "Content-Type, X-API-Key, Authorization"
-app.config["CORS_SUPPORTS_CREDENTIALS"] = False
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
 
 # 初始化数据库
@@ -72,16 +58,12 @@ try:
 except Exception as e:
     logging.error(f"数据库初始化失败: {e}")
 
+# CORS兜底: 确保每个响应(含Flask-CORS未覆盖的)都带CORS头
 @app.after_request
-def add_cors_headers(response):
-    origin = request.headers.get("Origin", "")
-    allowed = ALLOWED_ORIGINS.split(",") if ALLOWED_ORIGINS != "*" else ["*"]
-    if "*" in allowed or origin in allowed:
-        response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization"
+def ensure_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Credentials"] = "false"
-    response.headers["Access-Control-Max-Age"] = "86400"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, X-Session-Token, Authorization"
     return response
 
 @app.route("/api/<path:path>", methods=["OPTIONS"])
@@ -132,13 +114,14 @@ _cleanup_thread.start()
 
 # ========================== 工具函数 ==========================
 def _get_analyzer():
-    """【优化】获取当前请求的 analyzer，支持多会话并发使用不同 API Key"""
+    """获取当前请求的 analyzer，支持多会话并发使用不同 API Key"""
     session_token = request.headers.get("X-Session-Token", "")
     if session_token and session_token in _analyzers:
         return _analyzers[session_token]
     with _analyzers_lock:
-        if len(_analyzers) == 1:
-            return next(iter(_analyzers.values()))
+        if len(_analyzers) >= 1:
+            # 无匹配 token 时返回任意可用 analyzer (取最后一个 = 最近创建)
+            return list(_analyzers.values())[-1]
     return None
 
 
@@ -158,19 +141,19 @@ def parse_divide(divide_str):
 
 
 def parse_start_point(start_point_str, rows, cols, default=(0, 0)):
-    """【优化】统一的起始区块解析函数，消除重复代码"""
+    """统一的起始区块解析，格式: row,col (0-based, 如 0,0 = 左上角)"""
     if not start_point_str:
         return default
 
     try:
         parts = [p.strip() for p in start_point_str.split(",") if p.strip()]
         if len(parts) != 2:
-            raise ValueError("起始区块格式错误，应为 '行,列'，如 '1,1'")
+            raise ValueError("起始区块格式错误，应为 'row,col'，如 '0,0'")
         start_row = int(parts[0])
         start_col = int(parts[1])
         if start_row < 0 or start_col < 0 or start_row >= rows or start_col >= cols:
             raise ValueError(
-                f"起始区块超出范围，应在 0-{rows-1}, 0-{cols-1} 之间"
+                f"起始区块超出范围，应在 0~{rows-1}, 0~{cols-1} 之间"
             )
         return (start_row, start_col)
     except Exception as e:
@@ -318,7 +301,8 @@ def _inject_real_elevation(terrain_data, bounds, rows, cols):
 def _run_terrain_analysis(analyzer_local, assessor_local, planner_local, image_path, rows, cols, progress_callback=None, bounds=None):
     """AI分析→(可选DEM注入)→威胁评估→关键点检测管道"""
     terrain_data = analyzer_local.analyze_terrain(
-        image_path=image_path, rows=rows, cols=cols, max_workers=2,
+        image_path=image_path, rows=rows, cols=cols,
+        max_workers=analyzer_local.max_workers,
         progress_callback=progress_callback,
     )
     # 【混合方案】用真实DEM高程覆盖AI猜测值
@@ -471,19 +455,53 @@ def process_threat_task(task_id):
 # ========================== API 1: 热力图 ==========================
 @app.route("/api/init", methods=["POST"])
 def init_api():
-    """初始化AI分析器 - 支持多会话"""
+    """初始化AI分析器 - 支持多模型/多API/自定义并发 + 真实连通性测试"""
     try:
         data = request.get_json()
         api_key = data.get("api_key", "").strip()
+        model = data.get("model", "").strip() or "qwen3.6-plus"
+        base_url = data.get("base_url", "").strip() or None
+        max_workers = int(data.get("max_workers", 4))
 
         if not api_key:
             return jsonify({"success": False, "error": "API Key不能为空"}), 400
 
         new_analyzer = TerrainAnalyzer.create_analyzer(
             api_key=api_key,
-            model="qwen3.6-plus",
-            max_workers=2,
+            model=model,
+            max_workers=max_workers,
+            base_url=base_url,
         )
+
+        # ====== 真实连通性测试 ======
+        logging.info(f"[连接测试] 测试 {model} @ {new_analyzer.base_url} ...")
+        try:
+            from openai import OpenAI
+            import time
+            test_client = OpenAI(api_key="dummy", base_url=new_analyzer.base_url)
+            # 直接复用 analyzer 的 client 以使用真实 key
+            t0 = time.time()
+            resp = new_analyzer._client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                stream=False,
+            )
+            elapsed = time.time() - t0
+            reply = resp.choices[0].message.content.strip() if resp.choices else ""
+            logging.info(f"[连接测试] 成功 ({elapsed:.1f}s) → {reply[:30]}")
+        except Exception as e:
+            err_msg = str(e)
+            logging.warning(f"[连接测试] 失败: {err_msg}")
+            if "401" in err_msg or "Unauthorized" in err_msg or "Invalid" in err_msg:
+                return jsonify({"success": False, "error": "API Key 无效 (401 未授权)"}), 401
+            elif "429" in err_msg or "quota" in err_msg.lower() or "rate" in err_msg.lower():
+                return jsonify({"success": False, "error": "API 配额不足或频率限制 (429)"}), 429
+            elif "timed out" in err_msg.lower() or "connect" in err_msg.lower():
+                return jsonify({"success": False, "error": f"无法连接到 API 端点: {new_analyzer.base_url}"}), 503
+            else:
+                return jsonify({"success": False, "error": f"API 测试失败: {err_msg[:120]}"}), 500
+        # ====== 测试通过 ======
 
         session_token = secrets.token_hex(16)
         with _analyzers_lock:
@@ -491,7 +509,7 @@ def init_api():
 
         return jsonify({
             "success": True,
-            "message": "API初始化成功",
+            "message": f"连接成功 ({model}, {max_workers}并发)",
             "session_token": session_token,
         })
 
@@ -1144,6 +1162,7 @@ def _fetch_elevations(points):
 
 def _build_contour_image(x_start, y_start, zoom, cols, rows):
     """用DEM数据本地绘制彩色等高线地形图"""
+    import matplotlib.pyplot as plt
     import numpy as np
     from scipy.ndimage import zoom as ndi_zoom
 

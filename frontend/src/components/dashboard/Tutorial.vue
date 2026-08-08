@@ -30,8 +30,8 @@
             <div class="step">
               <div class="step-number">1</div>
               <div class="step-content">
-                <h4>上传地图</h4>
-                <p>点击"上传地图"区域，选择您要分析的地形图片。支持 JPG、PNG 格式，最大 24MB。</p>
+                <h4>选择地图区域</h4>
+                <p>在交互地图上拖拽、缩放选择目标分析区域。系统自动计算比例尺和区域面积。</p>
               </div>
             </div>
 
@@ -39,7 +39,7 @@
               <div class="step-number">2</div>
               <div class="step-content">
                 <h4>配置 API 密钥</h4>
-                <p>在 API 配置区域输入您的阿里云百炼 API 密钥。如果您还没有密钥，需要先申请。</p>
+                <p>在左侧API配置区域选择服务商（阿里云百炼/DeepSeek/Moonshot），输入API密钥，选择模型，点击"测试连接"验证。</p>
               </div>
             </div>
 
@@ -204,15 +204,15 @@ const sections = [
 const faqs = ref<FAQ[]>([
   {
     id: 1,
-    question: '如何获取阿里云百炼 API 密钥？',
+    question: '如何获取 API 密钥？',
     answer:
-      '访问阿里云官网，注册账号后进入控制台，在"产品服务"中找到"百炼"，按照指引创建应用并获取 API 密钥。',
+      '支持多服务商：阿里云百炼（bailian.console.aliyun.com）、DeepSeek（platform.deepseek.com）、Moonshot Kimi（platform.kimi.com），注册后在控制台创建API Key即可。',
   },
   {
     id: 2,
-    question: '支持哪些地图格式？',
+    question: '支持哪些地图图层？',
     answer:
-      '支持 JPG、PNG 格式的图片，最大文件大小为 24MB。建议使用高清、无压缩的地图图片以获得最佳分析效果。',
+      '支持 Esri 卫星影像（默认）和本地 DEM 构造的等高线地形图两种图层，可在左侧面板切换。',
   },
   {
     id: 3,

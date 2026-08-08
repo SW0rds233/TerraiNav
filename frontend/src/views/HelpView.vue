@@ -49,12 +49,12 @@
 
               <div class="guide-step">
                 <h3>第二步：配置 API 密钥</h3>
-                <p>进入"地图分析"页面，在左侧面板的"API配置"区域输入您的阿里云百炼 API 密钥。</p>
+                <p>进入"地图分析"页面，在左侧面板的"API配置"区域选择服务商（阿里云百炼/DeepSeek/Moonshot），输入对应API密钥并点击"测试连接"。</p>
               </div>
 
               <div class="guide-step">
-                <h3>第三步：上传地图</h3>
-                <p>点击上传区域，选择您要分析的地形图片。系统支持 JPG 和 PNG 格式。</p>
+                <h3>第三步：选择地图区域</h3>
+                <p>在交互地图上拖拽、缩放选择目标分析区域，系统自动计算比例尺和区域面积。</p>
               </div>
 
               <div class="guide-step">
@@ -109,9 +109,9 @@
 
               <div class="trouble-item">
                 <h3>API 密钥验证失败</h3>
-                <p><strong>可能原因：</strong>密钥输入错误、密钥已过期、权限不足</p>
+                <p><strong>可能原因：</strong>服务商选择错误、密钥输入错误、API端点不正确、账户余额不足</p>
                 <p>
-                  <strong>解决方法：</strong>检查密钥是否正确，重新生成密钥，确保密钥有足够的权限
+                  <strong>解决方法：</strong>确认选择了正确的服务商，检查密钥无前后空格，确认API端点地址，检查账户余额
                 </p>
               </div>
 
@@ -233,15 +233,15 @@ const searchQuery = ref('')
 const faqs = ref([
   {
     id: 1,
-    question: '如何获取阿里云百炼 API 密钥？',
+    question: '如何获取 API 密钥？',
     answer:
-      '访问百度智能云官网（cloud.baidu.com），注册账号后进入控制台，在"产品服务"中找到"千帆"，按照指引创建应用并获取 API 密钥。您需要完成实名认证才能使用 API 服务。',
+      '支持多种AI服务商：阿里云百炼（bailian.console.aliyun.com）、DeepSeek（platform.deepseek.com）、Moonshot Kimi（platform.kimi.com）。注册后在控制台创建API Key即可。',
   },
   {
     id: 2,
-    question: '支持哪些地图格式和大小？',
+    question: '如何选择分析区域？',
     answer:
-      '系统支持 JPG 和 PNG 格式的地图图片，最大文件大小为 24MB。建议使用分辨率在 1920×1080 到 3840×2160 之间的图片，以获得最佳分析效果。',
+      '在交互地图上拖拽、缩放即可选择目标区域。系统自动计算比例尺，支持地名搜索（如"杭州"）或直接输入经纬度（如 30.27,120.13）定位。',
   },
   {
     id: 3,

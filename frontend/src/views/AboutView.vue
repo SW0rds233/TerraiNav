@@ -25,8 +25,8 @@
         <div class="tech-grid">
           <div class="tech-card">
             <div class="tech-icon">🤖</div>
-            <h3>先进 AI 算法</h3>
-            <p>集成阿里云百炼大模型，具备强大的地形识别和威胁评估能力。</p>
+            <h3>多模型 AI</h3>
+            <p>支持阿里云百炼、DeepSeek、Moonshot(Kimi)等多种大模型，具备强大地形识别和威胁评估能力。</p>
           </div>
 
           <div class="tech-card">
@@ -55,7 +55,7 @@
           <div class="feature-card">
             <div class="feature-icon">🤖</div>
             <h3>智能威胁度分析</h3>
-            <p>基于阿里云百炼 AI 大模型，自动识别地形特征，评估威胁程度，生成高精度热力图。</p>
+            <p>基于多模态AI大模型，自动识别地形特征，融合真实DEM高程数据，生成高精度威胁度热力图。</p>
           </div>
 
           <div class="feature-card">
