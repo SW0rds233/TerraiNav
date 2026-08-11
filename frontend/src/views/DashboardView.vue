@@ -4,7 +4,7 @@
     <aside class="dashboard-sidebar">
       <div class="sidebar-logo">
         <span class="app-name">TerraiNav</span>
-        <span class="app-subtitle">地图适应无人机巡逻系统</span>
+        <span class="app-subtitle">地形适应无人机巡逻系统</span>
       </div>
 
       <nav class="sidebar-nav">

@@ -17,7 +17,7 @@ export const useUserStore = defineStore('user', () => {
   })
 
   const apiConfig = ref({
-    baiduQianfanApiKey: '',
+    aiApiKey: '',
     lastUsed: ''
   })
 
@@ -32,7 +32,7 @@ export const useUserStore = defineStore('user', () => {
 
   const isAdmin = computed(() => user.value.role === 'admin')
   const userName = computed(() => user.value.name || '用户')
-  const hasApiKey = computed(() => !!apiConfig.value.baiduQianfanApiKey)
+  const hasApiKey = computed(() => !!apiConfig.value.aiApiKey)
 
   const initializeUser = () => {
     const token = localStorage.getItem('terrainav_token')
@@ -145,7 +145,7 @@ export const useUserStore = defineStore('user', () => {
   }
 
   const updateApiKey = (apiKey: string) => {
-    apiConfig.value.baiduQianfanApiKey = apiKey
+    apiConfig.value.aiApiKey = apiKey
     apiConfig.value.lastUsed = new Date().toISOString()
 
     localStorage.setItem('terrainav_api_config', JSON.stringify(apiConfig.value))
@@ -154,7 +154,7 @@ export const useUserStore = defineStore('user', () => {
   }
 
   const validateApiKey = () => {
-    if (!apiConfig.value.baiduQianfanApiKey) {
+    if (!apiConfig.value.aiApiKey) {
       return { valid: false, message: 'API密钥为空' }
     }
 

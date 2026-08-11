@@ -215,7 +215,7 @@ mediaQuery.addEventListener('change', handleSystemThemeChange)
 // 加载设置
 const loadSettings = () => {
   // 从userStore加载设置
-  apiKey.value = userStore.apiConfig.baiduQianfanApiKey || ''
+      apiKey.value = userStore.apiConfig.aiApiKey || ''
   theme.value = userStore.preferences.theme
   language.value = userStore.preferences.language
   autoSave.value = userStore.preferences.autoSave
